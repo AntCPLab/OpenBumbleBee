@@ -546,9 +546,9 @@ NdArrayRef BumblebeeDot::Impl::doDotOLEReceiverSendStep(
   }
   bytes_sent = conn->GetStats()->sent_bytes - bytes_sent;
 
-  SPDLOG_DEBUG(
-      "Rank {}, {}@{}x{}x{} => {}x{}x{} Recv {} MiB, Response {} MiB "
-      "Pack "
+  SPDLOG_INFO(
+      "Rank {}, {}@{}x{}x{} split as {}x{}x{}. Recv {} MiB, Response {} MiB "
+      "CtPack "
       "({}) "
       "{} ms",
       conn->Rank(), batch_size, meta.dims[0], meta.dims[1], meta.dims[2],

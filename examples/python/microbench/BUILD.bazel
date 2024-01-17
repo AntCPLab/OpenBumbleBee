@@ -37,3 +37,12 @@ py_binary(
     ],
 )
 
+py_binary(
+    name = "matmul",
+    srcs = ["matmul.py"],
+    deps = [
+        "//spu:api",
+        "//spu/utils:simulation",
+    ],
+)
+

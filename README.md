@@ -60,6 +60,15 @@ bazel build -c opt examples/python/...
 It might take some times to fetch the dependencies.
     hidden_states = jax.nn.gelu(hidden_states)
 
+## Run Microbenchmarks
+
+* `bazel run -c opt examples/python/microbench:gelu`
+
+* `bazel run -c opt examples/python/microbench:softmax`
+
+* `bazel run -c opt examples/python/microbench:matmul`
+
+
 ## Run Private Inferernce
 
 ### Flax BERT Example

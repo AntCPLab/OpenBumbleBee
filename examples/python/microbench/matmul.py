@@ -1,4 +1,4 @@
-# Copyright 2023 Ant Group Co., Ltd.
+# Copyright 2021 Ant Group Co., Ltd.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,59 +19,53 @@ import jax.nn as jnn
 import jax.numpy as jnp
 import numpy as np
 
-import spu.intrinsic as si
 import spu.spu_pb2 as spu_pb2
 import spu.utils.simulation as ppsim
 
 
-def naive_softmax():
+def matmul_with_interleave():
     config = spu_pb2.RuntimeConfig(
         protocol=spu_pb2.ProtocolKind.BUMBLEBEE, field=spu_pb2.FieldType.FM64
     )
     config.enable_hal_profile = True
-    config.fxp_exp_mode = 0
     config.experimental_enable_colocated_optimization = False
 
     sim = ppsim.Simulator(2, config)
 
-    x = np.random.randn(128, 32) * 8.0
+    # use int matrix to avoid truncation
+    # To avoid truncation here because the baseOT might take too much time for init.
+    x = (np.random.randn(128, 128) * 8.0).astype(int)
+    y = (np.random.randn(128, 1024) * 8.0).astype(int)
 
-    target_func = lambda x: jnn.softmax(x)
-    spu_fn = ppsim.sim_jax(sim, target_func)
-
-    z = spu_fn(x)
-    g = target_func(x)
-
+    spu_fn = ppsim.sim_jax(sim, jnp.dot)
+    z = spu_fn(x, y)
+    g = jnp.dot(x, y)
     diff = z - g
-    print("max diff = {}".format(np.max(diff)))
+
+    print("matmul max diff = {}".format(np.max(diff)))
 
 
-def bumblebee_softmax():
+def matmul_with_packlwe():
     config = spu_pb2.RuntimeConfig(
         protocol=spu_pb2.ProtocolKind.BUMBLEBEE, field=spu_pb2.FieldType.FM64
     )
     config.enable_hal_profile = True
-    config.fxp_exp_mode = 0
     config.experimental_enable_colocated_optimization = False
-    copts = spu_pb2.CompilerOptions()
-    # Tweak compiler options
-    # enable x / broadcast(y) -> x * broadcast(1/y) which accelerate the softmax
-    copts.enable_optimize_denominator_with_broadcast = True
 
     sim = ppsim.Simulator(2, config)
 
-    x = np.random.randn(128, 32) * 8.0
+    # Dynamic packing: we turn to PackLWEs when the number of output is smaller than lattice dimension
+    x = (np.random.randn(16, 256) * 8.0).astype(int)
+    y = (np.random.randn(256, 8) * 8.0).astype(int)
 
-    target_func = lambda x: jnn.softmax(x)
-    spu_fn = ppsim.sim_jax(sim, target_func, copts=copts)
-
-    z = spu_fn(x)
-    g = target_func(x)
-
+    spu_fn = ppsim.sim_jax(sim, jnp.dot)
+    z = spu_fn(x, y)
+    g = jnp.dot(x, y)
     diff = z - g
-    print("max diff = {}".format(np.max(diff)))
+
+    print("matmul max diff = {}".format(np.max(diff)))
 
 
 if __name__ == "__main__":
-    # naive_softmax()
-    bumblebee_softmax()
+    matmul_with_packlwe()
+    matmul_with_interleave()
