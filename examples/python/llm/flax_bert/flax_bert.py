@@ -1,4 +1,3 @@
-#! /opt/homebrew/opt/python@3.8/libexec/bin/python
 # Copyright 2023 Ant Group Co., Ltd.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,31 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from transformers import (
-    RobertaTokenizerFast,
-    FlaxRobertaForSequenceClassification,
-    BertTokenizerFast,
-    FlaxBertForSequenceClassification,
-    BertConfig,
-)
-from datasets import load_dataset
-import jax.numpy as jnp
-import numpy as np
-import jax.nn as jnn
 import argparse
 import json
-import spu.utils.distributed as ppd
-from flax.linen.linear import Array
-import flax.linen as fnn
-from contextlib import contextmanager
 import time
+from contextlib import contextmanager
+
+import flax.linen as fnn
+import jax.nn as jnn
+import jax.numpy as jnp
+import numpy as np
+from datasets import load_dataset
+from flax.linen.linear import Array
+from transformers import (
+    BertConfig,
+    BertTokenizerFast,
+    FlaxBertForSequenceClassification,
+    FlaxRobertaForSequenceClassification,
+    RobertaTokenizerFast,
+)
+
 import spu.intrinsic as intrinsic
-import spu.utils.distributed as ppd
 import spu.spu_pb2 as spu_pb2
+import spu.utils.distributed as ppd
 
 copts = spu_pb2.CompilerOptions()
 # enable x / broadcast(y) -> x * broadcast(1/y) which accelerate the softmax
 copts.enable_optimize_denominator_with_broadcast = True
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="distributed driver.")
@@ -129,6 +130,7 @@ def main(tokenizer_func, model_func, checkpoint):
         run_on_cpu(model, input_ids, attention_masks, labels)
         run_on_spu(model, input_ids, attention_masks, labels)
         break  # just test one sentense
+
 
 if __name__ == "__main__":
     tokenizer = BertTokenizerFast
