@@ -21,7 +21,7 @@
                     "127.0.0.1:9331"
                 ],
                 "runtime_config": {
-                    "protocol": "CHEETAH",
+                    "protocol": "BUMBLEBEE",
                     "field": "FM64",
                     "enable_pphlo_profile": true,
                     "enable_hal_profile": true,

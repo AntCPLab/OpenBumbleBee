@@ -75,22 +75,6 @@ NdArrayRef MatMulAV::proc(KernelEvalContext* ctx, const NdArrayRef& x,
   SPU_ENFORCE(ptype != nullptr, "rhs should be a private type");
   const int owner = ptype->owner();
 
-  if (owner == rank) {
-    auto field = ptype->field();
-    DISPATCH_ALL_FIELDS(field, "check_binary", [&]() {
-      NdArrayView<ring2k_t> _y(y);
-      bool is_binary = true;
-      for (int64_t i = 0; i < _y.numel(); ++i) {
-        if (_y[i] > 1) {
-          is_binary = false;
-          break;
-        }
-      }
-
-      SPDLOG_INFO("MatMulAV: is RHS binary {}", is_binary);
-    });
-  }
-
   NdArrayRef out;
   const Shape3D dim3 = {x.shape()[0], x.shape()[1], y.shape()[1]};
   // (x0 + x1)*y = <x0 * y>_0 + <x0 * y>_1 + x1 * y
