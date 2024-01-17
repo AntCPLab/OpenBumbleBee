@@ -141,6 +141,8 @@ Value exp_taylor(SPUContext* ctx, const Value& x) {
   SPU_ENFORCE(fxp_exp_iters != 0, "fxp_exp_iters should not be {}",
               fxp_exp_iters);
 
+  auto not_too_small =
+      f_less(ctx, constant(ctx, -14.0F, x.dtype(), x.shape()), x);
   Value res = f_add(ctx, _trunc(ctx, x, fxp_exp_iters).setDtype(x.dtype()),
                     constant(ctx, 1.0F, x.dtype(), x.shape()));
 
@@ -148,7 +150,7 @@ Value exp_taylor(SPUContext* ctx, const Value& x) {
     res = f_square(ctx, res);
   }
 
-  return res;
+  return hal::_mul(ctx, res, not_too_small).setDtype(x.dtype());
 }
 
 namespace {

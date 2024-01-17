@@ -14,10 +14,14 @@
 
 from .example_binary_impl import example_binary
 from .example_impl import example
+from .f_gelu_impl import f_gelu
+from .f_silu_impl import f_silu
 
 # DO-NOT-EDIT:ADD_IMPORT
 
 __all__ = [
+    "f_gelu",
+    "f_silu"
     # "example",
     # "example_binary",
     # DO-NOT-EDIT:EOL

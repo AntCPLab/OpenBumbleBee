@@ -124,6 +124,9 @@ enum ProtocolKind {
   // A semi-honest 3PC-protocol for Neural Network, P2 as the helper,
   // (https://eprint.iacr.org/2018/442)
   SECURENN = 5;
+
+  // [BumbleBee](https://eprint.iacr.org/2023/1678) for large transformer inference
+  BUMBLEBEE = 6;
 }
 
 message ValueMetaProto {

@@ -15,7 +15,7 @@ to an MPC-specific intermediate representation named PPHLO and then dispatches P
 In theory, protocol developers only need to implement a basic set of MPC operation APIs to fully use the SPU infrastructure to
 run machine learning or data analysis programs. That is to say, for most MPC protocol development,
 it only needs to add some source code files into the libspu/mpc folder.
-At present, SPU has integrated several protocols such as ABY3 and Cheetah,
+At present, SPU has integrated several protocols such as ABY3 and Bumblebee,
 which can be regarded as a guide for protocol implementation.
 
 A walk-through guide
@@ -65,7 +65,7 @@ need to add their functions in **RegisterProtocol** to implement protocols.
         return regAby3Protocol(ctx, lctx);
       }
       case ProtocolKind::CHEETAH: {
-        return regCheetahProtocol(ctx, lctx);
+        return regBumblebeeProtocol(ctx, lctx);
       }
       default: {
         SPU_THROW("Invalid protocol kind {}", ctx->config().protocol());

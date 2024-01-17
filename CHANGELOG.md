@@ -32,7 +32,7 @@
 - [Feature] Add radix sort support for SEMI2K
 - [Feature] Experimental: ABY3 matmul CUDA support
 - [Feature] Experimental: Private support under colocated mode
-- [Feature] Add yacl ot support for Cheetah
+- [Feature] Add yacl ot support for Bumblebee
 
 ## 20230906
 
@@ -211,7 +211,7 @@
             messages, chosen/correlated/random choices, 1o2/1oN)
 - [Feature] add non-linear computation protocols based on silent ot (comparison,
             truncation, b2a, triple, randbit, etc)
-- [Feature] add a 2PC protocol: Cheetah
+- [Feature] add a 2PC protocol: Bumblebee
 - [Improvement] concatenate is a lot faster
 - [API] add RuntimeConfig.enable_op_time_profile to ask SPU to collect timing profiling data
 - [Bugfix] fixed pphlo.ConstOp may lose signed bit after encoding

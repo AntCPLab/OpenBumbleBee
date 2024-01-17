@@ -23,7 +23,7 @@
 #include "llvm/Support/JSON.h"
 
 #include "libspu/mpc/aby3/protocol.h"
-#include "libspu/mpc/cheetah/protocol.h"
+#include "libspu/mpc/bumblebee/protocol.h"
 #include "libspu/mpc/semi2k/protocol.h"
 
 namespace {
@@ -51,7 +51,7 @@ llvm::cl::opt<std::string> cli_parties(
 llvm::cl::opt<std::string> cli_protocol(
     "protocol", llvm::cl::init("aby3"),
     llvm::cl::desc(
-        "benchmark protocol, supported protocols: semi2k / aby3 / cheetah, "
+        "benchmark protocol, supported protocols: semi2k / aby3 / bumblebee, "
         "default: aby3"));
 llvm::cl::opt<uint32_t> cli_numel(
     "numel", llvm::cl::init(kUnSetMagic),
@@ -215,14 +215,14 @@ void PrepareSemi2k(std::string& parties, uint32_t& party_num) {
       spu::mpc::makeSemi2kProtocol;  // semi2k protocol factory
 }
 
-void PrepareCheetah(std::string& parties, uint32_t& party_num) {
+void PrepareBumblebee(std::string& parties, uint32_t& party_num) {
   using BenchInteral = spu::mpc::bench::BenchConfig;
   if (parties.empty() && party_num == 0) {
     parties = kTwoPartyHosts;
   }
   party_num = std::count(parties.begin(), parties.end(), ',') + 1;
   SPU_ENFORCE(party_num == 2);
-  BenchInteral::bench_factory = spu::mpc::makeCheetahProtocol;
+  BenchInteral::bench_factory = spu::mpc::makeBumblebeeProtocol;
 }
 
 void PrepareAby3(std::string& parties, uint32_t& party_num) {
@@ -245,10 +245,10 @@ void SetUpProtocol() {
     PrepareSemi2k(parties, party_num);
   } else if (protocol == "aby3") {
     PrepareAby3(parties, party_num);
-  } else if (protocol == "cheetah") {
-    PrepareCheetah(parties, party_num);
+  } else if (protocol == "bumblebee") {
+    PrepareBumblebee(parties, party_num);
   } else {
-    SPU_THROW("unknown protocol: {}, supported = semi2k/aby3/cheetah",
+    SPU_THROW("unknown protocol: {}, supported = semi2k/aby3/bumblebee",
               protocol);
   }
   benchmark::AddCustomContext("Benchmark Protocol", protocol);

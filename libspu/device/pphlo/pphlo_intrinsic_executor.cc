@@ -16,6 +16,7 @@
 
 #include "spdlog/spdlog.h"
 
+#include "libspu/kernel/hal/intrinsic/nn/activation.h"
 #include "libspu/kernel/hlo/casting.h"
 #include "libspu/kernel/hlo/const.h"
 
@@ -23,6 +24,16 @@ namespace spu::device::pphlo {
 
 std::vector<Value> intrinsic_dispatcher(SPUContext* ctx, llvm::StringRef name,
                                         absl::Span<const Value> inputs) {
+  namespace skh = spu::kernel::hal;
+  if (name == "f_gelu") {
+    SPU_ENFORCE(inputs.size() == 1 && inputs[0].isFxp());
+    return {skh::intrinsic::nn::f_gelu(ctx, inputs[0])};
+  }
+  if (name == "f_silu") {
+    SPU_ENFORCE(inputs.size() == 1 && inputs[0].isFxp());
+    return {skh::intrinsic::nn::f_silu(ctx, inputs[0])};
+  }
+
   // FIXME: This should be something register by protocol
   if (name == "example_binary") {
     SPDLOG_INFO("Binary example, input0 = {}, input1 = {}", inputs[0],

@@ -29,11 +29,11 @@ You have to enable these flags in :ref:`/reference/runtime_config.md` when you s
 - enable_action_trace
 - enable_pphlo_trace
 
-How could I use Cheetah protocol?
+How could I use Bumblebee protocol?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-You only need to select Cheetah protocol in :ref:`/reference/runtime_config.md`. Please search for *protocol* field in RuntimeConfig.
-And please keep in mind that Cheetah protocol is a 2PC protocol.
+You only need to select Bumblebee protocol in :ref:`/reference/runtime_config.md`. Please search for *protocol* field in RuntimeConfig.
+And please keep in mind that Bumblebee protocol is a 2PC protocol.
 
 
 General

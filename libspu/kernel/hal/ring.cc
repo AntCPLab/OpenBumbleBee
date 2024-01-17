@@ -565,7 +565,7 @@ Value _bitdeintl(SPUContext* ctx, const Value& in) {
 // - b2a+2*mul < 2*mula2b, we prefer to convert p to ashare to avoid 2*b2a.
 // - b2a+2*mul > 2*mula2b, we prefer to leave p as bshare.
 //
-// Cheetah is the later case.
+// Bumblebee is the later case.
 Value _prefer_a(SPUContext* ctx, const Value& x) {
   if (x.storage_type().isa<BShare>()) {
     if (ctx->config().protocol() == ProtocolKind::CHEETAH &&

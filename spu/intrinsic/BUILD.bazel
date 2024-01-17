@@ -25,6 +25,7 @@ py_library(
     deps = [
         ":example",
         ":example_binary",
+        ":nn_base",
         # DO-NOT-EDIT:ADD_IMPORT
     ],
 )
@@ -43,6 +44,17 @@ py_library(
     name = "example_binary",
     srcs = [
         "example_binary_impl.py",
+    ],
+    visibility = [
+        "//visibility:private",
+    ],
+)
+
+py_library(
+    name = "nn_base",
+    srcs = [
+        "f_gelu_impl.py",
+        "f_silu_impl.py",
     ],
     visibility = [
         "//visibility:private",

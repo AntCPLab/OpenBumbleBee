@@ -23,7 +23,7 @@ This is a high level overview of how the repository is laid out. Some major fold
                          different mpc protocols need to conform.
     * [aby3/](libspu/mpc/aby3/): The semi-honest variant of ABY3 protocol.
                                  Currently only `Arithmetic` and `Boolean` are implemented.
-    * [cheetah/](libspu/mpc/cheetah/): An excellent semi-honest 2PC protocol implemented by [Alibaba-Gemini-Lab](https://alibaba-gemini-lab.github.io/).
+    * [bumblebee/](libspu/mpc/bumblebee/): An excellent semi-honest 2PC protocol implemented by [Alibaba-Gemini-Lab](https://alibaba-gemini-lab.github.io/).
     * [semi2k/](libspu/mpc/semi2k/): The semi-honest variant of SPDZ protocol.
                                      It could be shipped with different correlated random generators.
     * [ref2k/](libspu/mpc/ref2k/): A plaintext protocol. It is aimed to serve as a reference implementation

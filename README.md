@@ -5,7 +5,7 @@ The codes are still under heavy developments, and **should not** be used in any 
 
 ### Requirements
 
-Our implementations are built on top of the  [SPU](https://github.com/secretflow/spu) library. 
+Our implementations are built on top of the  [SPU](https://github.com/secretflow/spu) library.
 
 ## Build
 
@@ -51,8 +51,7 @@ def __call__(self, hidden_states):
     return hidden_states
 ```
 
-
-### Build 
+### Build
 
 ```sh
 bazel build -c opt examples/python/...
@@ -60,6 +59,7 @@ bazel build -c opt examples/python/...
 
 It might take some times to fetch the dependencies.
     hidden_states = jax.nn.gelu(hidden_states)
+
 ## Run Private Inferernce
 
 ### Flax BERT Example
@@ -73,13 +73,13 @@ It might take some times to fetch the dependencies.
 2. Launch SPU backend runtime
 
     ```sh
-    env SPU_CHEETAH_SET_IEQUAL_BITS=16 bazel run -c opt //examples/python/utils:nodectl -- --config `pwd`/examples/python/llm/flax_bert/2pc.json up
+    env SPU_BB_SET_IEQUAL_BITS=16 bazel run -c opt //examples/python/utils:nodectl -- --config `pwd`/examples/python/llm/flax_bert/2pc.json up
     ```
 
 3. Run `flax_bert` example
 
     ```sh
-    env SPU_CHEETAH_SET_IEQUAL_BITS=16 bazel run -c opt //examples/python/llm/flax_bert -- --config `pwd`/examples/python/llm/flax_bert/2pc.json
+    env SPU_BB_SET_IEQUAL_BITS=16 bazel run -c opt //examples/python/llm/flax_bert -- --config `pwd`/examples/python/llm/flax_bert/2pc.json
     ```
 
 ### Flax GPT2 Example
@@ -87,13 +87,13 @@ It might take some times to fetch the dependencies.
 1. Launch SPU backend runtime
 
     ```sh
-    env SPU_CHEETAH_SET_IEQUAL_BITS=16 bazel run -c opt //examples/python/utils:nodectl -- --config `pwd`/examples/python/llm/flax_gpt2/2pc.json up
+    env SPU_BB_SET_IEQUAL_BITS=16 bazel run -c opt //examples/python/utils:nodectl -- --config `pwd`/examples/python/llm/flax_gpt2/2pc.json up
     ```
 
 2. Run `flax_gpt2` example
 
     ```sh
-    env SPU_CHEETAH_SET_IEQUAL_BITS=16 bazel run -c opt //examples/python/llm/flax_gpt2 -- --config `pwd`/examples/python/llm/flax_gpt2/2pc.json
+    env SPU_BB_SET_IEQUAL_BITS=16 bazel run -c opt //examples/python/llm/flax_gpt2 -- --config `pwd`/examples/python/llm/flax_gpt2/2pc.json
     ```
 
 ### Flax VIT Example
