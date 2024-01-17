@@ -14,40 +14,40 @@
 
 #include "libspu/mpc/cheetah/ot/basic_ot_prot.h"
 
-#include <random>
-
-#include "ot_util.h"
-
 #include "libspu/mpc/cheetah/env.h"
-#include "libspu/mpc/cheetah/ot/emp/ferret.h"
-#include "libspu/mpc/cheetah/ot/ot_util.h"
-#include "libspu/mpc/cheetah/ot/yacl/ferret.h"
+#include "libspu/mpc/cheetah/ot/emp_ferret/emp_ferret.h"
+#include "libspu/mpc/cheetah/ot/util.h"
+#include "libspu/mpc/cheetah/ot/yacl_ferret/yacl_ferret.h"
 #include "libspu/mpc/cheetah/type.h"
 #include "libspu/mpc/common/communicator.h"
 #include "libspu/mpc/utils/ring_ops.h"
 
 namespace spu::mpc::cheetah {
 
-BasicOTProtocols::BasicOTProtocols(std::shared_ptr<Communicator> conn)
+BasicOTProtocols::BasicOTProtocols(std::shared_ptr<Communicator> conn,
+                                   FerretOTImpl impl)
     : conn_(std::move(conn)) {
   SPU_ENFORCE(conn_ != nullptr);
-  if (TestEnvFlag(EnvFlag::SPU_CTH_ENABLE_EMP_OT)) {
-    using Ot = EmpFerretOt;
+  if (impl == FerretOTImpl::default_impl) {
+    auto use_emp = TestEnvFlag(EnvFlag::SPU_CHEETAH_ENABLE_EMP_FERRET);
+    impl = use_emp ? FerretOTImpl::emp : FerretOTImpl::yacl;
+  }
+
+  if (impl == FerretOTImpl::emp) {
     if (conn_->getRank() == 0) {
-      ferret_sender_ = std::make_shared<Ot>(conn_, true);
-      ferret_receiver_ = std::make_shared<Ot>(conn_, false);
+      ferret_sender_ = std::make_shared<EmpFerretOT>(conn_, true);
+      ferret_receiver_ = std::make_shared<EmpFerretOT>(conn_, false);
     } else {
-      ferret_receiver_ = std::make_shared<Ot>(conn_, false);
-      ferret_sender_ = std::make_shared<Ot>(conn_, true);
+      ferret_receiver_ = std::make_shared<EmpFerretOT>(conn_, false);
+      ferret_sender_ = std::make_shared<EmpFerretOT>(conn_, true);
     }
-  } else {
-    using Ot = YaclFerretOt;
+  } else if (impl == FerretOTImpl::yacl) {
     if (conn_->getRank() == 0) {
-      ferret_sender_ = std::make_shared<Ot>(conn_, true);
-      ferret_receiver_ = std::make_shared<Ot>(conn_, false);
+      ferret_sender_ = std::make_shared<YaclFerretOT>(conn_, true);
+      ferret_receiver_ = std::make_shared<YaclFerretOT>(conn_, false);
     } else {
-      ferret_receiver_ = std::make_shared<Ot>(conn_, false);
-      ferret_sender_ = std::make_shared<Ot>(conn_, true);
+      ferret_receiver_ = std::make_shared<YaclFerretOT>(conn_, false);
+      ferret_sender_ = std::make_shared<YaclFerretOT>(conn_, true);
     }
   }
 }
@@ -70,7 +70,7 @@ NdArrayRef BasicOTProtocols::B2A(const NdArrayRef &inp) {
 
 NdArrayRef BasicOTProtocols::PackedB2A(const NdArrayRef &inp) {
   const auto *share_t = inp.eltype().as<BShrTy>();
-  auto field = inp.eltype().as<Ring2k>()->field();
+  auto field = inp.eltype().as<RingTy>()->field();
   const size_t nbits = share_t->nbits();
   SPU_ENFORCE(nbits > 0 && nbits <= 8 * SizeOf(field));
 
@@ -100,7 +100,7 @@ NdArrayRef BasicOTProtocols::PackedB2A(const NdArrayRef &inp) {
   auto rand = convert_from_bits_form(rand_bits);
 
   // open c = x ^ r
-  auto opened = OpenShare(ring_xor(inp, rand), ReduceOp::XOR, nbits, conn_);
+  auto opened = OpenShare(ring_xor(inp, rand), ReduceOp::XOR, conn_, nbits);
 
   // compute c + (1 - 2*c)*<r>
   NdArrayRef oup = ring_zeros(field, inp.shape());
@@ -139,7 +139,7 @@ NdArrayRef BasicOTProtocols::PackedB2A(const NdArrayRef &inp) {
 NdArrayRef BasicOTProtocols::SingleB2A(const NdArrayRef &inp, int bit_width) {
   const auto *share_t = inp.eltype().as<BShrTy>();
   SPU_ENFORCE_EQ(share_t->nbits(), 1UL);
-  auto field = inp.eltype().as<Ring2k>()->field();
+  auto field = inp.eltype().as<RingTy>()->field();
   if (bit_width == 0) {
     bit_width = SizeOf(field) * 8;
   }
@@ -192,8 +192,8 @@ NdArrayRef BasicOTProtocols::B2ASingleBitWithSize(const NdArrayRef &inp,
                                                   int bit_width) {
   const auto *share_t = inp.eltype().as<BShrTy>();
   SPU_ENFORCE(share_t->nbits() == 1, "Support for 1bit boolean only");
-  auto field = inp.eltype().as<Ring2k>()->field();
-  SPU_ENFORCE(bit_width > 1 && bit_width < (int)(8 * SizeOf(field)),
+  auto field = inp.eltype().as<RingTy>()->field();
+  SPU_ENFORCE(bit_width > 1 && bit_width <= (int)(8 * SizeOf(field)),
               "bit_width={} is invalid", bit_width);
   return SingleB2A(inp, bit_width);
 }
@@ -202,14 +202,29 @@ NdArrayRef BasicOTProtocols::BitwiseAnd(const NdArrayRef &lhs,
                                         const NdArrayRef &rhs) {
   SPU_ENFORCE_EQ(lhs.shape(), rhs.shape());
 
-  auto field = lhs.eltype().as<Ring2k>()->field();
+  auto field = lhs.eltype().as<RingTy>()->field();
   const auto *shareType = lhs.eltype().as<BShrTy>();
-  auto [a, b, c] = AndTriple(field, lhs.shape(), shareType->nbits());
+  auto and_triple = AndTriple(field, lhs.shape(), shareType->nbits());
+  const auto &[a, b, c] = and_triple;
+  const int64_t n = lhs.numel();
 
-  // open x^a, y^b
-  int nbits = shareType->nbits();
-  auto xa = OpenShare(ring_xor(lhs, a), ReduceOp::XOR, nbits, conn_);
-  auto yb = OpenShare(ring_xor(rhs, b), ReduceOp::XOR, nbits, conn_);
+  // Open lhs^x || rhs^b
+  auto concat = ring_zeros(field, {2 * n});
+  DISPATCH_ALL_FIELDS(field, "concat", [&]() {
+    NdArrayView<ring2k_t> _concat(concat);
+    NdArrayView<const ring2k_t> _lhs(lhs);
+    NdArrayView<const ring2k_t> _rhs(rhs);
+    NdArrayView<const ring2k_t> lhs_mask(and_triple[0]);
+    NdArrayView<const ring2k_t> rhs_mask(and_triple[1]);
+    pforeach(0, n, [&](int64_t i) {
+      _concat[i] = _lhs[i] ^ lhs_mask[i];
+      _concat[n + i] = _rhs[i] ^ rhs_mask[i];
+    });
+  });
+
+  concat = OpenShare(concat, ReduceOp::XOR, conn_, shareType->nbits());
+  auto xa = concat.slice({0}, {n}, {1}).reshape(lhs.shape());
+  auto yb = concat.slice({n}, {2 * n}, {1}).reshape(lhs.shape());
 
   // Zi = Ci ^ ((X ^ A) & Bi) ^ ((Y ^ B) & Ai) ^ <(X ^ A) & (Y ^ B)>
   auto z = ring_xor(ring_xor(ring_and(xa, b), ring_and(yb, a)), c);
@@ -227,16 +242,33 @@ std::array<NdArrayRef, 2> BasicOTProtocols::CorrelatedBitwiseAnd(
   SPU_ENFORCE_EQ(lhs.shape(), rhs1.shape());
   SPU_ENFORCE(lhs.eltype() == rhs1.eltype());
 
-  auto field = lhs.eltype().as<Ring2k>()->field();
+  auto field = lhs.eltype().as<RingTy>()->field();
   const auto *shareType = lhs.eltype().as<BShrTy>();
   SPU_ENFORCE_EQ(shareType->nbits(), 1UL);
-  auto [a, b0, c0, b1, c1] = CorrelatedAndTriple(field, lhs.shape());
+  int64_t n = lhs.numel();
+  auto corr_and_triple = CorrelatedAndTriple(field, lhs.shape());
+  const auto &[a, b0, c0, b1, c1] = corr_and_triple;
 
-  // open x^a, y^b0, y1^b1
-  int nbits = shareType->nbits();
-  auto xa = OpenShare(ring_xor(lhs, a), ReduceOp::XOR, nbits, conn_);
-  auto y0b0 = OpenShare(ring_xor(rhs0, b0), ReduceOp::XOR, nbits, conn_);
-  auto y1b1 = OpenShare(ring_xor(rhs1, b1), ReduceOp::XOR, nbits, conn_);
+  auto concat = ring_zeros(field, {3 * n});
+  DISPATCH_ALL_FIELDS(field, "concat", [&]() {
+    NdArrayView<ring2k_t> _concat(concat);
+    NdArrayView<const ring2k_t> _lhs(lhs);
+    NdArrayView<const ring2k_t> _rhs0(rhs0);
+    NdArrayView<const ring2k_t> _rhs1(rhs1);
+    NdArrayView<const ring2k_t> lhs_mask(corr_and_triple[0]);
+    NdArrayView<const ring2k_t> rhs0_mask(corr_and_triple[1]);
+    NdArrayView<const ring2k_t> rhs1_mask(corr_and_triple[3]);
+    pforeach(0, n, [&](int64_t i) {
+      _concat[i] = _lhs[i] ^ lhs_mask[i];
+      _concat[n + i] = _rhs0[i] ^ rhs0_mask[i];
+      _concat[2 * n + i] = _rhs1[i] ^ rhs1_mask[i];
+    });
+  });
+
+  concat = OpenShare(concat, ReduceOp::XOR, conn_, shareType->nbits());
+  auto xa = concat.slice({0}, {n}, {1}).reshape(lhs.shape());
+  auto y0b0 = concat.slice({n}, {2 * n}, {1}).reshape(lhs.shape());
+  auto y1b1 = concat.slice({2 * n}, {3 * n}, {1}).reshape(lhs.shape());
 
   // Zi = Ci ^ ((X ^ A) & Bi) ^ ((Y ^ B) & Ai) ^ <(X ^ A) & (Y ^ B)>
   auto z0 = ring_xor(ring_xor(ring_and(xa, b0), ring_and(y0b0, a)), c0);
@@ -435,4 +467,54 @@ NdArrayRef BasicOTProtocols::Multiplexer(const NdArrayRef &msg,
   });
 }
 
+NdArrayRef BasicOTProtocols::MultiplexerOnPrivate(const NdArrayRef &msg,
+                                                  const NdArrayRef &select) {
+  SPU_ENFORCE_EQ(msg.shape(), select.shape());
+  const auto *shareType = select.eltype().as<BShrTy>();
+  SPU_ENFORCE_EQ(shareType->nbits(), 1UL);
+
+  const auto field = msg.eltype().as<Ring2k>()->field();
+  const int64_t size = msg.numel();
+
+  auto recv = ring_zeros(field, {msg.numel()});
+  std::vector<uint8_t> sel(size);
+  // Compute (x0 + x1) * b
+  // x0 * b + x1 * b
+  DISPATCH_ALL_FIELDS(field, "MultiplexerOnPrivate", [&]() {
+    NdArrayView<const ring2k_t> _msg(msg);
+    NdArrayView<const ring2k_t> _sel(select);
+    auto _recv = absl::MakeSpan(&recv.at<ring2k_t>(0), size);
+
+    pforeach(0, size,
+             [&](int64_t i) { sel[i] = static_cast<uint8_t>(_sel[i] & 1); });
+    ferret_receiver_->RecvCAMCC(sel, _recv);
+
+    pforeach(0, size, [&](int64_t i) {
+      _recv[i] = _msg[i] * static_cast<ring2k_t>(sel[i]) + _recv[i];
+    });
+  });
+  return recv.as(msg.eltype());
+}
+
+NdArrayRef BasicOTProtocols::MultiplexerOnPrivate(const NdArrayRef &msg) {
+  SPU_ENFORCE(msg.isCompact());
+
+  const auto field = msg.eltype().as<Ring2k>()->field();
+  const int64_t size = msg.numel();
+
+  auto recv = ring_zeros(field, msg.shape());
+  // Compute (x0 + x1) * b
+  // x0 * b + x1 * b
+  DISPATCH_ALL_FIELDS(field, "MultiplexerOnPrivate", [&]() {
+    auto _msg = absl::MakeConstSpan(&msg.at<ring2k_t>(0), size);
+    auto _recv = absl::MakeSpan(&recv.at<ring2k_t>(0), size);
+
+    ferret_sender_->SendCAMCC(_msg, _recv);
+    ferret_sender_->Flush();
+
+    pforeach(0, size, [&](int64_t i) { _recv[i] = -_recv[i]; });
+  });
+
+  return recv.as(msg.eltype());
+}
 }  // namespace spu::mpc::cheetah

@@ -40,7 +40,7 @@ class BasicOTProtocols;
 class CompareProtocol {
  public:
   // REQUIRE 1 <= compare_radix <= 4
-  explicit CompareProtocol(const std::shared_ptr<BasicOTProtocols>& base,
+  explicit CompareProtocol(std::shared_ptr<BasicOTProtocols> base,
                            size_t compare_radix = 4);
 
   ~CompareProtocol();
@@ -48,32 +48,52 @@ class CompareProtocol {
   NdArrayRef Compute(const NdArrayRef& inp, bool greater_than,
                      int64_t bitwidth = 0);
 
+  // The party rank that provides the choice bits in BatchCompute.
+  static constexpr int BatchedChoiceProvider() { return 1; }
+
+  // Perform a batch compare where P0's input is a batch
+  // CMP(x1, y), CMP(x2, y), ..., CMP(xB, y)
+  // Output format:
+  // out[i][j] = CMP(x[i][j], y[i]) for i in [0, n) and j in [0, B)
+  NdArrayRef BatchCompute(const NdArrayRef& inp, bool greater_than,
+                          int64_t numel, int64_t bitwidth,
+                          int64_t batch_size = 1);
+
   std::array<NdArrayRef, 2> ComputeWithEq(const NdArrayRef& inp,
                                           bool greater_than,
                                           int64_t bitwidth = 0);
 
  private:
   // Require 1D array
+  NdArrayRef DoBatchCompute(const NdArrayRef& inp, bool greater_than,
+                            int64_t bitwidth, int64_t batch_size,
+                            int64_t real_ot_size);
+  // Require 1D array
   NdArrayRef DoCompute(const NdArrayRef& inp, bool greater_than,
                        NdArrayRef* eq = nullptr, int64_t bitwidth = 0);
 
   // Require 1D array
-  NdArrayRef TraversalAND(NdArrayRef cmp, NdArrayRef eq, size_t num_input,
-                          size_t num_digits);
+  NdArrayRef TraversalAND(const NdArrayRef& cmp, NdArrayRef eq,
+                          size_t num_input, size_t num_digits);
 
-  // Require num_digits to be two-power value
-  NdArrayRef TraversalANDFullBinaryTree(NdArrayRef cmp, NdArrayRef eq,
-                                        size_t num_input, size_t num_digits);
   // Require 1D array
-  std::array<NdArrayRef, 2> TraversalANDWithEq(NdArrayRef cmp, NdArrayRef eq,
+  std::array<NdArrayRef, 2> TraversalANDWithEq(const NdArrayRef& cmp,
+                                               const NdArrayRef& eq,
                                                size_t num_input,
                                                size_t num_digits);
 
-  // Require num_digits to be two-power value
+  // Require 1D array
+  // Require num_digits = 2^k is a full binary tree
+  NdArrayRef TraversalANDFullBinaryTree(NdArrayRef cmp, NdArrayRef eq,
+                                        size_t num_input, size_t num_digits);
+
+  // Require 1D array
+  // Require num_digits = 2^k is full binary tree
   std::array<NdArrayRef, 2> TraversalANDWithEqFullBinaryTree(NdArrayRef cmp,
                                                              NdArrayRef eq,
                                                              size_t num_input,
                                                              size_t num_digits);
+
   size_t compare_radix_;
   bool is_sender_{false};
   std::shared_ptr<BasicOTProtocols> basic_ot_prot_;

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 load("//bazel:spu.bzl", "spu_cc_library", "spu_cc_test")
-load("@yacl//bazel:yacl.bzl", "AES_COPT_FLAGS")
+# load("@yacl//bazel:yacl.bzl", "AES_COPT_FLAGS")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -29,61 +29,11 @@ spu_cc_library(
     name = "state",
     srcs = ["state.cc"],
     hdrs = ["state.h"],
-    copts = AES_COPT_FLAGS,
     deps = [
         "//libspu/mpc/cheetah/arith:cheetah_arith",
         "//libspu/mpc/cheetah/nonlinear:cheetah_nonlinear",
-        "//libspu/mpc/cheetah/ot",
+        "//libspu/mpc/cheetah/ot:cheetah_ot",
         "//libspu/mpc/cheetah/rlwe:cheetah_rlwe",
-    ],
-)
-
-spu_cc_library(
-    name = "env",
-    srcs = ["env.cc"],
-    hdrs = ["env.h"],
-)
-
-spu_cc_library(
-    name = "boolean",
-    srcs = [
-        "boolean.cc",
-        "boolean_semi2k.cc",
-    ],
-    hdrs = ["boolean.h"],
-    copts = AES_COPT_FLAGS,
-    deps = [
-        ":state",
-        ":type",
-    ],
-)
-
-spu_cc_library(
-    name = "conversion",
-    srcs = ["conversion.cc"],
-    hdrs = ["conversion.h"],
-    copts = AES_COPT_FLAGS,
-    deps = [
-        ":state",
-        ":type",
-        "//libspu/core:vectorize",
-        "//libspu/mpc:ab_api",
-        "//libspu/mpc:kernel",
-        "//libspu/mpc/common:communicator",
-    ],
-)
-
-spu_cc_library(
-    name = "arithmetic",
-    srcs = [
-        "arithmetic.cc",
-        "arithmetic_semi2k.cc",
-    ],
-    hdrs = ["arithmetic.h"],
-    copts = AES_COPT_FLAGS,
-    deps = [
-        ":state",
-        ":type",
     ],
 )
 
@@ -91,12 +41,10 @@ spu_cc_library(
     name = "protocol",
     srcs = ["protocol.cc"],
     hdrs = ["protocol.h"],
-    copts = AES_COPT_FLAGS,
     deps = [
-        ":arithmetic",
-        ":boolean",
-        ":conversion",
+        ":env",
         ":state",
+        "//libspu/mpc/cheetah/kernels:cheetah_kernels",
         "//libspu/mpc/common:prg_state",
         "//libspu/mpc/common:pv2k",
         "//libspu/mpc/standard_shape:protocol",
@@ -150,4 +98,10 @@ spu_cc_library(
         "//libspu/core:type",
         "//libspu/mpc/common:pv2k",
     ],
+)
+
+spu_cc_library(
+    name = "env",
+    srcs = ["env.cc"],
+    hdrs = ["env.h"],
 )

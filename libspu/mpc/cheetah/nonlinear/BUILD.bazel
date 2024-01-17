@@ -30,7 +30,7 @@ spu_cc_library(
     srcs = ["compare_prot.cc"],
     hdrs = ["compare_prot.h"],
     deps = [
-        "//libspu/mpc/cheetah/ot",
+        "//libspu/mpc/cheetah/ot:cheetah_ot",
         "@yacl//yacl/link",
     ],
 )
@@ -40,7 +40,7 @@ spu_cc_library(
     srcs = ["equal_prot.cc"],
     hdrs = ["equal_prot.h"],
     deps = [
-        "//libspu/mpc/cheetah/ot",
+        "//libspu/mpc/cheetah/ot:cheetah_ot",
         "@yacl//yacl/link",
     ],
 )
@@ -49,6 +49,17 @@ spu_cc_library(
     name = "truncate_prot",
     srcs = ["truncate_prot.cc"],
     hdrs = ["truncate_prot.h"],
+    deps = [
+        ":compare_prot",
+        "@yacl//yacl/link",
+        "@yacl//yacl/utils:elapsed_timer",
+    ],
+)
+
+spu_cc_library(
+    name = "ring_ext_prot",
+    srcs = ["ring_ext_prot.cc"],
+    hdrs = ["ring_ext_prot.h"],
     deps = [
         ":compare_prot",
     ],
@@ -81,5 +92,26 @@ spu_cc_test(
     deps = [
         ":equal_prot",
         "//libspu/mpc/utils:simulate",
+    ],
+)
+
+spu_cc_test(
+    name = "ring_ext_prot_test",
+    srcs = ["ring_ext_prot_test.cc"],
+    deps = [
+        ":ring_ext_prot",
+        "//libspu/mpc/utils:simulate",
+        "@com_github_microsoft_seal//:seal",
+    ],
+)
+
+spu_cc_test(
+    name = "mixed_prime_ring_conv_test",
+    srcs = ["mixed_prime_ring_conv_test.cc"],
+    deps = [
+        ":ring_ext_prot",
+        "//libspu/mpc/utils:simulate",
+        "//libspu/mpc/cheetah/rlwe:rlwe_utils",
+        "@com_github_microsoft_seal//:seal",
     ],
 )

@@ -28,15 +28,15 @@ if __name__ == "__main__":
     Please DONT commit it unless it will cause build break.
     """
 
-    sim = ppsim.Simulator.simple(3, spu_pb2.ProtocolKind.ABY3, spu_pb2.FieldType.FM64)
+    sim = ppsim.Simulator.simple(2, spu_pb2.ProtocolKind.CHEETAH, spu_pb2.FieldType.FM64)
     copts = spu_pb2.CompilerOptions()
     # Tweak compiler options
     copts.disable_div_sqrt_rewrite = True
 
-    x = np.random.randn(3, 4)
+    x = np.random.randn(3, 5)
     y = np.random.randn(5, 6)
-    fn = lambda x, y: si.example_binary(x, y)
-    # fn = lambda x, y: jnp.matmul(x, y)
+    #fn = lambda x, y: si.example_binary(x, y)
+    fn = lambda x, y: jnp.matmul(x, y)
     spu_fn = ppsim.sim_jax(sim, fn, copts=copts)
     z = spu_fn(x, y)
 

@@ -25,19 +25,44 @@ static bool IsEnvOn(const char *name) {
   }
 
   std::string s(str);
-  // to lower case
   std::transform(s.begin(), s.end(), s.begin(),
-                 [](auto c) { return std::tolower(c); });
+                 [](unsigned char c) { return std::tolower(c); });
+  if (s == "1" or s == "on") {
+    return true;
+  }
   return s == "1" or s == "on";
 }
 
-bool TestEnvFlag(EnvFlag g) {
-  switch (g) {
-    case EnvFlag::SPU_CTH_ENABLE_EMP_OT:
-      return IsEnvOn("SPU_CTH_ENABLE_EMP_OT");
+static int GetEnvInt(const char *name) {
+  const char *str = std::getenv(name);
+  if (str == nullptr) {
+    return 0;
+  }
+
+  return std::atoi(str);
+}
+
+bool TestEnvFlag(EnvFlag e) {
+  switch (e) {
+    case EnvFlag::SPU_CHEETAH_ENABLE_APPROX_LESS_THAN:
+      return IsEnvOn("SPU_CHEETAH_ENABLE_APPROX_LESS_THAN");
+    case EnvFlag::SPU_CHEETAH_ENABLE_MUL_ERROR:
+      return IsEnvOn("SPU_CHEETAH_ENABLE_MUL_ERROR");
+    case EnvFlag::SPU_CHEETAH_ENABLE_EMP_FERRET:
+      return IsEnvOn("SPU_CHEETAH_ENABLE_EMP_FERRET");
     default:
       return false;
   }
+}
+
+int TestEnvInt(EnvFlag e) {
+  switch (e) {
+    case EnvFlag::SPU_CHEETAH_SET_IEQUAL_BITS:
+      return GetEnvInt(("SPU_CHEETAH_SET_IEQUAL_BITS"));
+    default:
+      break;
+  }
+  return 0;
 }
 
 }  // namespace spu::mpc::cheetah

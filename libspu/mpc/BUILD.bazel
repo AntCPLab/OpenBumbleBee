@@ -46,11 +46,8 @@ spu_cc_library(
     hdrs = ["factory.h"],
     deps = [
         "//libspu:spu_cc_proto",
-        "//libspu/mpc/aby3",
         "//libspu/mpc/cheetah",
         "//libspu/mpc/ref2k",
-        "//libspu/mpc/securenn",
-        "//libspu/mpc/semi2k",
     ],
 )
 

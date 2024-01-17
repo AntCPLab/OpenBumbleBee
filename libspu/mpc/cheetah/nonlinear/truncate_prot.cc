@@ -13,17 +13,18 @@
 // limitations under the License.
 #include "libspu/mpc/cheetah/nonlinear/truncate_prot.h"
 
+#include "yacl/utils//elapsed_timer.h"
+
 #include "libspu/core/type.h"
 #include "libspu/mpc/cheetah/nonlinear/compare_prot.h"
 #include "libspu/mpc/cheetah/ot/basic_ot_prot.h"
-#include "libspu/mpc/cheetah/ot/ot_util.h"
+#include "libspu/mpc/cheetah/ot/util.h"
 #include "libspu/mpc/cheetah/type.h"
 #include "libspu/mpc/utils/ring_ops.h"
 
 namespace spu::mpc::cheetah {
 
-TruncateProtocol::TruncateProtocol(
-    const std::shared_ptr<BasicOTProtocols>& base)
+TruncateProtocol::TruncateProtocol(std::shared_ptr<BasicOTProtocols> base)
     : basic_ot_prot_(base) {
   SPU_ENFORCE(base != nullptr);
 }
@@ -93,6 +94,7 @@ NdArrayRef TruncateProtocol::MSB1ToWrap(const NdArrayRef& inp,
   const size_t bw = SizeOf(field) * 8;
 
   NdArrayRef cot_output = ring_zeros(field, inp.shape());
+  yacl::ElapsedTimer timer;
   DISPATCH_ALL_FIELDS(field, "MSB1ToWrap", [&]() {
     using u2k = std::make_unsigned<ring2k_t>::type;
     NdArrayView<const u2k> xinp(inp);
@@ -116,6 +118,8 @@ NdArrayRef TruncateProtocol::MSB1ToWrap(const NdArrayRef& inp,
                                                   xout, shift_bits);
     }
   });
+
+  SPDLOG_DEBUG("DEBUG: CAMCC {} took {} ms", numel, timer.CountMs());
 
   return cot_output.as(makeType<BShrTy>(field, 1));
 }
@@ -144,6 +148,7 @@ NdArrayRef TruncateProtocol::MSB0ToWrap(const NdArrayRef& inp,
   constexpr size_t nbits = 1;
 
   NdArrayRef outp;
+  yacl::ElapsedTimer timer;
   if (0 == rank) {
     outp = ring_randbit(field, inp.shape());
     std::vector<uint8_t> send(numel * N);
@@ -186,6 +191,7 @@ NdArrayRef TruncateProtocol::MSB0ToWrap(const NdArrayRef& inp,
       });
     });
   }
+  SPDLOG_DEBUG("DEBUG: CMCC {} took {} ms", numel, timer.CountMs());
 
   return basic_ot_prot_->B2ASingleBitWithSize(
       outp.as(makeType<BShrTy>(field, 1)), static_cast<int>(shift_bits));
@@ -250,6 +256,7 @@ NdArrayRef TruncateProtocol::Compute(const NdArrayRef& inp, Meta meta) {
     const ring2k_t component = (static_cast<ring2k_t>(1) << (bit_width - 1));
     NdArrayView<const ring2k_t> xinp(inp);
 
+    yacl::ElapsedTimer timer;
     // Compute w = 1{x0 + x1 >= 2^{k}}
     if (meta.signed_arith && rank == 0) {
       // For signed arith right shift, we convert to unsigned logic right shift
@@ -262,6 +269,7 @@ NdArrayRef TruncateProtocol::Compute(const NdArrayRef& inp, Meta meta) {
     } else {
       wrap_ashr = ComputeWrap(inp, meta);
     }
+
     NdArrayView<const ring2k_t> xwrap(wrap_ashr);
 
     // NOTE(lwj) We need logic right shift here

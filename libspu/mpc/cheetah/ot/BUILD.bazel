@@ -18,36 +18,36 @@ load("@yacl//bazel:yacl.bzl", "AES_COPT_FLAGS")
 package(default_visibility = ["//visibility:public"])
 
 spu_cc_library(
+    name = "cheetah_ot",
+    srcs = ["basic_ot_prot.cc"],
+    hdrs = ["basic_ot_prot.h"],
+    deps = [
+        ":util",
+        "//libspu/mpc/cheetah:env",
+        "//libspu/mpc/cheetah/ot/emp_ferret",
+        "//libspu/mpc/cheetah/ot/yacl_ferret",
+        "@yacl//yacl/base:int128",
+        "@yacl//yacl/link",
+        "@yacl//yacl/utils:elapsed_timer",
+    ]
+)
+
+
+spu_cc_library(
     name = "ferret_ot_interface",
     hdrs = ["ferret_ot_interface.h"],
 )
 
 spu_cc_library(
-    name = "ot_util",
-    srcs = ["ot_util.cc"],
-    hdrs = ["ot_util.h"],
+    name = "util",
+    srcs = ["util.cc"],
+    hdrs = ["util.h"],
     deps = [
         "//libspu/core:ndarray_ref",
         "//libspu/core:prelude",
         "//libspu/mpc/common:communicator",
         "@com_google_absl//absl/types:span",
         "@yacl//yacl/base:int128",
-    ],
-)
-
-spu_cc_library(
-    name = "ot",
-    srcs = ["basic_ot_prot.cc"],
-    hdrs = ["basic_ot_prot.h"],
-    deps = [
-        ":ot_util",
-        "//libspu/mpc/cheetah:env",
-        "//libspu/mpc/cheetah:type",
-        "//libspu/mpc/cheetah/ot/emp:ferret",
-        "//libspu/mpc/cheetah/ot/yacl:ferret",
-        "//libspu/mpc/common:communicator",
-        "@yacl//yacl/base:int128",
-        "@yacl//yacl/link",
     ],
 )
 
@@ -59,16 +59,16 @@ spu_cc_test(
         "exclusive-if-local",
     ],
     deps = [
-        ":ot",
+        ":cheetah_ot",
         "//libspu/mpc/utils:simulate",
     ],
 )
 
 spu_cc_test(
-    name = "ot_util_test",
-    srcs = ["ot_util_test.cc"],
+    name = "util_test",
+    srcs = ["util_test.cc"],
     deps = [
-        ":ot_util",
+        ":util",
         "//libspu/mpc/utils:ring_ops",
     ],
 )

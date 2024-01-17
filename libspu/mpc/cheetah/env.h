@@ -15,11 +15,27 @@
 #pragma once
 
 namespace spu::mpc::cheetah {
+
 enum class EnvFlag {
-  // use emp/ferret instead of the yacl/ferret
-  SPU_CTH_ENABLE_EMP_OT,
+  // enable approximately less than between a share and a plaintext
+  SPU_CHEETAH_ENABLE_APPROX_LESS_THAN,
+
+  // enable 1bit error in Mul
+  SPU_CHEETAH_ENABLE_MUL_ERROR,
+
+  // enable ciphertext packing
+  SPU_CHEETAH_ENABLE_MMUL_PACK,
+
+  // use emp/ferret instead of yacl/ferret
+  SPU_CHEETAH_ENABLE_EMP_FERRET,
+
+  // set the max bits for i_equal
+  SPU_CHEETAH_SET_IEQUAL_BITS,
 };
 
-bool TestEnvFlag(EnvFlag f);
+bool TestEnvFlag(EnvFlag e);
+
+// If not exist return 0
+int TestEnvInt(EnvFlag e);
 
 }  // namespace spu::mpc::cheetah

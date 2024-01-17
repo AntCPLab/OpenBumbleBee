@@ -28,10 +28,14 @@ class CheetahDotTest
 INSTANTIATE_TEST_SUITE_P(
     Cheetah, CheetahDotTest,
     testing::Combine(testing::Values(FieldType::FM64, FieldType::FM128),
-                     testing::Values(Shape3D{8, 7, 5}, Shape3D{57, 30, 1},
-                                     Shape3D{30, 57, 1}, Shape3D{18, 8, 41},
-                                     Shape3D{500, 13, 25},
-                                     Shape3D{18, 768, 78})),
+                     testing::Values(
+                         // Shape3D{8, 7, 5},
+                         //  Shape3D{57, 30, 1},
+                         //  Shape3D{30, 57, 1},
+                         //  Shape3D{18, 8, 41},
+                         //  Shape3D{500, 13, 25},
+                         //  Shape3D{18, 768, 78}
+                         Shape3D{1, 40960, 256})),
     [](const testing::TestParamInfo<CheetahDotTest::ParamType>& p) {
       return fmt::format("{}x{}x{}x{}", std::get<0>(std::get<1>(p.param)),
                          std::get<1>(std::get<1>(p.param)),

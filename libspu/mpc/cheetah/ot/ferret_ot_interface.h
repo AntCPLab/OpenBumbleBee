@@ -1,4 +1,5 @@
-// Copyright 2022 Ant Group Co., Ltd.
+//
+// Copyright 2021 Ant Group Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,15 +12,24 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 #pragma once
+
+#include <memory>
+
+#include "absl/types/span.h"
+#include "yacl/base/int128.h"
+
+#include "libspu/mpc/common/communicator.h"
 
 namespace spu::mpc::cheetah {
 
-class FerretOtInterface {
+class FerretOTInterface {
  public:
-  virtual ~FerretOtInterface() = default;
+  virtual ~FerretOTInterface() {}
 
   virtual int Rank() const = 0;
+
   virtual void Flush() = 0;
 
   // One-of-N OT where msg_array is a Nxn array.
@@ -64,7 +74,7 @@ class FerretOtInterface {
 
   // correlated additive message, chosen choice
   // (x, x + corr * choice) <- (corr, choice)
-  // Can use bit_width=0 to further indicate output ring. `bit_width=0` means to
+  // Can use bit_width to further indicate output ring. `bit_width = 0` means to
   // use the full range.
   virtual void SendCAMCC(absl::Span<const uint8_t> corr,
                          absl::Span<uint8_t> output, int bit_width = 0) = 0;
@@ -104,4 +114,5 @@ class FerretOtInterface {
   virtual void RecvRMCC(absl::Span<const uint8_t> binary_choices,
                         absl::Span<uint128_t> output, size_t bit_width = 0) = 0;
 };
+
 }  // namespace spu::mpc::cheetah

@@ -61,27 +61,33 @@ class MatMatProtocol {
 
   bool IsValidMeta(const Meta& meta) const;
 
+  // no packing
   NdArrayRef ParseResult(FieldType field, const Meta& meta,
                          absl::Span<const RLWEPt> ans_poly) const;
 
+  // no packing
   NdArrayRef ParseResult(FieldType field, const Meta& meta,
                          absl::Span<const RLWEPt> ans_poly,
                          const ModulusSwitchHelper& msh) const;
 
   // Coefficients via Packed Batched MatMul
   // output shape batch_size x dims[0] x dims[2]
-  NdArrayRef ParseBatchPackedResult(FieldType field, size_t batch_size,
-                                    const Meta& meta,
-                                    absl::Span<const RLWEPt> polys,
-                                    const ModulusSwitchHelper& msh) const;
+  NdArrayRef ParseBatchRLWEResult(FieldType field, size_t batch_size,
+                                  const Meta& meta,
+                                  absl::Span<const RLWEPt> polys,
+                                  const ModulusSwitchHelper& msh) const;
 
   // Coefficients via Packed MatMul
   // output shape dims[0] x dims[2]
-  NdArrayRef ParsePackedResult(FieldType field, const Meta& meta,
-                               absl::Span<const RLWEPt> ans_poly,
-                               const ModulusSwitchHelper& msh) const;
+  NdArrayRef ParseLWEResult(FieldType field, const Meta& meta,
+                            absl::Span<const RLWEPt> ans_poly,
+                            const ModulusSwitchHelper& msh) const;
 
   void ExtractLWEsInplace(const Meta& meta, absl::Span<RLWECt> rlwe) const;
+
+  // Wrap the coefficients as LWE (no copying)
+  void ExtractLWEs(const Meta& meta, absl::Span<const RLWECt> rlwes_non_ntt,
+                   absl::Span<PhantomLWECt> lwes) const;
 
   // LHS_mat * RHS_mat
   // LHS = RLWECt, RHS = RLWEPt (when LHS is smaller)

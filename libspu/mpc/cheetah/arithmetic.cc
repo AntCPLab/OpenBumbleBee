@@ -20,6 +20,7 @@
 #include "libspu/core/trace.h"
 #include "libspu/core/xt_helper.h"
 #include "libspu/mpc/cheetah/arith/common.h"
+#include "libspu/mpc/cheetah/env.h"
 #include "libspu/mpc/cheetah/nonlinear/compare_prot.h"
 #include "libspu/mpc/cheetah/nonlinear/equal_prot.h"
 #include "libspu/mpc/cheetah/nonlinear/truncate_prot.h"
@@ -130,10 +131,83 @@ NdArrayRef MsbA2B::proc(KernelEvalContext* ctx, const NdArrayRef& x) const {
   });
 }
 
+NdArrayRef LessAP::proc(KernelEvalContext* ctx, const NdArrayRef& x,
+                        const NdArrayRef& y) const {
+  SPU_TRACE_ACTION(GET_TRACER(ctx), ctx->lctx(), (TR_MPC | TR_LAR), (~TR_MPC),
+                   "less_ap");
+  int64_t n = x.numel();
+  if (n == 0) {
+    return NdArrayRef(x.eltype(), x.shape());
+  }
+
+  const int rank = ctx->getState<Communicator>()->getRank();
+  const auto field = ctx->getState<Z2kState>()->getDefaultField();
+  size_t fxp = ctx->sctx()->config().fxp_fraction_bits();
+  bool allow_approx_less_than =
+      TestEnvFlag(EnvFlag::SPU_CHEETAH_ENABLE_APPROX_LESS_THAN);
+
+  size_t bits_skip = allow_approx_less_than ? fxp - 4 : 0;
+
+  // msb((x - y) / 2^d) using
+  auto fx = x.reshape({n});
+  auto fy = y.reshape({n});
+  NdArrayRef minus(x.eltype(), {n});
+  if (rank == 0) {
+    minus = ring_sub(fx, fy);
+  } else {
+    minus = fx.clone();
+  }
+
+  if (bits_skip > 0) {
+    ring_arshift_(minus, bits_skip);
+  }
+
+  MsbA2B msb_prot(SizeOf(field) * 8 - bits_skip);
+  return msb_prot.proc(ctx, minus).reshape(x.shape());
+}
+
+NdArrayRef LessPA::proc(KernelEvalContext* ctx, const NdArrayRef& x,
+                        const NdArrayRef& y) const {
+  SPU_TRACE_ACTION(GET_TRACER(ctx), ctx->lctx(), (TR_MPC | TR_LAR), (~TR_MPC),
+                   "less_pa");
+  int64_t n = x.numel();
+  if (n == 0) {
+    return NdArrayRef(x.eltype(), x.shape());
+  }
+
+  const int rank = ctx->getState<Communicator>()->getRank();
+  const auto field = ctx->getState<Z2kState>()->getDefaultField();
+  size_t fxp = ctx->sctx()->config().fxp_fraction_bits();
+  bool allow_approx_less_than =
+      TestEnvFlag(EnvFlag::SPU_CHEETAH_ENABLE_APPROX_LESS_THAN);
+  size_t bits_skip = allow_approx_less_than ? fxp - 4 : 0;
+  // msb((x - y) / 2^d) using
+  auto fx = x.reshape({n});
+  auto fy = y.reshape({n});
+  NdArrayRef minus(x.eltype(), {n});
+  if (rank == 0) {
+    minus = ring_sub(fx, fy);
+  } else {
+    minus = ring_neg(fy);
+  }
+
+  if (bits_skip > 0) {
+    ring_arshift_(minus, bits_skip);
+  }
+
+  MsbA2B msb_prot(SizeOf(field) * 8 - bits_skip);
+  return msb_prot.proc(ctx, minus).reshape(x.shape());
+}
+
 NdArrayRef EqualAP::proc(KernelEvalContext* ctx, const NdArrayRef& x,
                          const NdArrayRef& y) const {
-  EqualAA equal_aa;
+  SPU_TRACE_ACTION(GET_TRACER(ctx), ctx->lctx(), (TR_MPC | TR_LAR), (~TR_MPC),
+                   "equal_ap");
+  int bits = TestEnvInt(EnvFlag::SPU_CHEETAH_SET_IEQUAL_BITS);
   const auto field = ctx->getState<Z2kState>()->getDefaultField();
+  bits = std::max(0, std::min<int>(bits, SizeOf(field) * 8));
+  printf("EqualAP bis %d\n", bits);
+  EqualAA equal_aa(bits);
   // TODO(juhou): Can we use any place holder to indicate the dummy 0s.
   if (0 == ctx->getState<Communicator>()->getRank()) {
     return equal_aa.proc(ctx, x, ring_zeros(field, x.shape()));
@@ -223,12 +297,56 @@ NdArrayRef MulA1B::proc(KernelEvalContext* ctx, const NdArrayRef& ashr,
   return out;
 }
 
+NdArrayRef MulAA::squareDirectly(KernelEvalContext* ctx,
+                                 const NdArrayRef& x) const {
+  const int64_t numel = x.numel();
+  if (numel == 0) {
+    return NdArrayRef(x.eltype(), x.shape());
+  }
+
+  //   (x0 + x1) * (x0 + x1)
+  // = x0^2 + 2*<x0*x1> + x1^2
+  auto* comm = ctx->getState<Communicator>();
+  auto* mul_prot = ctx->getState<CheetahMulState>()->get();
+  const int rank = comm->getRank();
+
+  auto fx = x.reshape({numel});
+  int64_t nhalf = numel <= 8192 ? numel : numel / 2;
+
+  auto subtask = std::async([&]() -> spu::NdArrayRef {
+    return mul_prot->MulOLE(fx.slice({0}, {nhalf}, {1}), rank == 0);
+  });
+
+  NdArrayRef mul1;
+  if (nhalf < numel) {
+    auto dupx = ctx->getState<CheetahMulState>()->duplx();
+    mul1 = mul_prot->MulOLE(fx.slice({nhalf}, {numel}, {1}), dupx.get(),
+                            rank == 1);
+  }
+  auto mul0 = subtask.get();
+
+  NdArrayRef x0x1(x.eltype(), {numel});
+  std::memcpy(&x0x1.at(0), &mul0.at(0), mul0.elsize() * nhalf);
+  if (nhalf < numel) {
+    std::memcpy(&x0x1.at(nhalf), &mul1.at(0), mul1.elsize() * mul1.numel());
+  }
+  ring_add_(x0x1, x0x1);
+  x0x1 = x0x1.reshape(x.shape());
+
+  return ring_add(x0x1, ring_mul(x, x)).as(x.eltype());
+}
+
 NdArrayRef MulAA::proc(KernelEvalContext* ctx, const NdArrayRef& x,
                        const NdArrayRef& y) const {
   SPU_ENFORCE_EQ(x.shape(), y.shape());
 
   int64_t batch_sze = ctx->getState<CheetahMulState>()->get()->OLEBatchSize();
   int64_t numel = x.numel();
+
+  if (x.data() == y.data() && x.strides() == y.strides() &&
+      4 * x.numel() >= batch_sze) {
+    return squareDirectly(ctx, x);
+  }
 
   if (numel >= batch_sze) {
     return mulDirectly(ctx, x, y);
@@ -278,8 +396,6 @@ NdArrayRef MulAA::mulDirectly(KernelEvalContext* ctx, const NdArrayRef& x,
   // Compute the cross terms x0*y1, x1*y0 homomorphically
   auto* comm = ctx->getState<Communicator>();
   auto* mul_prot = ctx->getState<CheetahMulState>()->get();
-  mul_prot->LazyInitKeys(x.eltype().as<Ring2k>()->field());
-
   const int rank = comm->getRank();
   auto fx = x.reshape({x.numel()});
   auto fy = y.reshape({y.numel()});
@@ -304,6 +420,42 @@ NdArrayRef MulAA::mulDirectly(KernelEvalContext* ctx, const NdArrayRef& x,
   return ring_add(x0y1, ring_add(x1y0, ring_mul(x, y))).as(x.eltype());
 }
 
+NdArrayRef MulAV::mulDirectly(KernelEvalContext* ctx, const NdArrayRef& x,
+                              const NdArrayRef& y) const {
+  const int64_t numel = x.numel();
+  if (numel == 0) {
+    return NdArrayRef(x.eltype(), x.shape());
+  }
+
+  auto* comm = ctx->getState<Communicator>();
+  auto* mul_prot = ctx->getState<CheetahMulState>()->get();
+  const int rank = comm->getRank();
+  const auto* ptype = y.eltype().as<Priv2kTy>();
+  SPU_ENFORCE(ptype != nullptr, "rhs should be a private type");
+  const int owner = ptype->owner();
+
+  // (x0 * x1) * y
+  // <x0 * y> + x1 * y
+  auto fx = x.reshape({numel});
+  NdArrayRef out;
+  // compute <x0 * y>
+  if (rank != owner) {
+    out = mul_prot->MulOLE(fx, /*eval*/ true);
+  } else {
+    auto fy = y.reshape({numel});
+    out = mul_prot->MulOLE(fy, /*eval*/ false);
+    ring_add_(out, ring_mul(fx, fy));
+  }
+
+  return out.reshape(x.shape()).as(x.eltype());
+}
+
+NdArrayRef MulAV::proc(KernelEvalContext* ctx, const NdArrayRef& x,
+                       const NdArrayRef& y) const {
+  SPU_ENFORCE_EQ(x.shape(), y.shape());
+  return mulDirectly(ctx, x, y);
+}
+
 // A is (M, K); B is (K, N)
 NdArrayRef MatMulAA::proc(KernelEvalContext* ctx, const NdArrayRef& x,
                           const NdArrayRef& y) const {
@@ -313,8 +465,6 @@ NdArrayRef MatMulAA::proc(KernelEvalContext* ctx, const NdArrayRef& x,
 
   auto* comm = ctx->getState<Communicator>();
   auto* dot_prot = ctx->getState<CheetahDotState>()->get();
-  dot_prot->LazyInitKeys(x.eltype().as<Ring2k>()->field());
-
   const int rank = comm->getRank();
 
   // (x0 + x1) * (y0 + y1)
@@ -351,8 +501,6 @@ NdArrayRef MatMulAV::proc(KernelEvalContext* ctx, const NdArrayRef& x,
   }
   auto* comm = ctx->getState<Communicator>();
   auto* dot_prot = ctx->getState<CheetahDotState>()->get();
-  dot_prot->LazyInitKeys(x.eltype().as<Ring2k>()->field());
-
   const int rank = comm->getRank();
   const auto* ptype = y.eltype().as<Priv2kTy>();
   SPU_ENFORCE(ptype != nullptr, "rhs should be a private type");
@@ -368,6 +516,162 @@ NdArrayRef MatMulAV::proc(KernelEvalContext* ctx, const NdArrayRef& x,
   } else {
     out = dot_prot->DotOLE(x, dim3, true);
   }
+  return out.as(x.eltype());
+}
+
+NdArrayRef MatMulVVS::proc(KernelEvalContext* ctx, const NdArrayRef& x,
+                           const NdArrayRef& y) const {
+  auto out_type = makeType<cheetah::AShrTy>(ctx->sctx()->getField());
+  if (0 == x.numel() || 0 == y.numel()) {
+    return NdArrayRef(out_type, {x.shape()[0], y.shape()[1]});
+  }
+  auto* comm = ctx->getState<Communicator>();
+  auto* dot_prot = ctx->getState<CheetahDotState>()->get();
+
+  const int self_rank = comm->getRank();
+  auto lhs_owner = x.eltype().as<Priv2kTy>()->owner();
+
+  const Shape3D dim3 = {x.shape()[0], x.shape()[1], y.shape()[1]};
+  if (self_rank == lhs_owner) {
+    return dot_prot->DotOLE(x, dim3, /*is_lhs*/ true).as(out_type);
+  } else {
+    return dot_prot->DotOLE(y, dim3, /*is_lhs*/ false).as(out_type);
+  }
+}
+
+void BatchMatMulAA::evaluate(KernelEvalContext* ctx) const {
+  const auto& lhs = ctx->getParam<Value>(0);
+  const auto& rhs = ctx->getParam<Value>(1);
+  auto xs = lhs.shape();
+  auto ys = rhs.shape();
+  SPU_ENFORCE(xs.ndim() == ys.ndim(), "ndim mismatch: lhs={}, rhs={}", xs, ys);
+  SPU_ENFORCE(xs[0] == ys[0], "batch mismatch: lhs={}, rhs={}", xs, ys);
+  SPU_ENFORCE(xs[2] == ys[1], "shape mismatch: lhs={}, rhs={}", xs, ys);
+  ctx->setOutput(WrapValue(proc(ctx, lhs.data(), rhs.data())));
+}
+
+// A is (B, M, K); B is (B, K, N)
+NdArrayRef BatchMatMulAA::proc(KernelEvalContext* ctx, const NdArrayRef& x,
+                               const NdArrayRef& y) const {
+  if (0 == x.numel() || 0 == y.numel()) {
+    return NdArrayRef(x.eltype(), {x.shape()[0], y.shape()[1]});
+  }
+  SPU_ENFORCE(x.ndim() == 3 && y.ndim() == 3);
+  SPU_ENFORCE_EQ(x.shape()[0], y.shape()[0]);
+  SPU_ENFORCE_EQ(x.shape()[2], y.shape()[1]);
+
+  auto* comm = ctx->getState<Communicator>();
+  auto* dot_prot = ctx->getState<CheetahDotState>()->get();
+  const int rank = comm->getRank();
+
+  // (x0 + x1) * (y0 + y1)
+  // Compute the cross terms
+  const Shape4D dim4 = {x.shape()[0], x.shape()[1], x.shape()[2], y.shape()[2]};
+
+  auto* conn = comm->lctx().get();
+  auto dupx = ctx->getState<CheetahMulState>()->duplx();
+  std::future<NdArrayRef> task = std::async(std::launch::async, [&] {
+    // Compute x0*y1
+    if (rank == 0) {
+      return dot_prot->BatchDotOLE(x, dupx.get(), dim4, true);
+    } else {
+      return dot_prot->BatchDotOLE(y, dupx.get(), dim4, false);
+    }
+  });
+
+  NdArrayRef x1y0;
+  if (rank == 0) {
+    x1y0 = dot_prot->BatchDotOLE(y, conn, dim4, false);
+  } else {
+    x1y0 = dot_prot->BatchDotOLE(x, conn, dim4, true);
+  }
+
+  const Strides strides(x.shape().size(), 1);
+  Index lhs_slice_end(x.shape().begin(), x.shape().end());
+  Index rhs_slice_end(y.shape().begin(), y.shape().end());
+  Index lhs_slice_begin(3, 0);
+  Index rhs_slice_begin(3, 0);
+  NdArrayRef out(x.eltype(), {dim4[0], dim4[1], dim4[3]});
+  for (int64_t b = 0; b < dim4[0]; ++b) {
+    lhs_slice_begin[0] = b;
+    lhs_slice_end[0] = b + 1;
+    rhs_slice_begin[0] = b;
+    rhs_slice_end[0] = b + 1;
+    auto lhs = x.slice(lhs_slice_begin, lhs_slice_end, strides)
+                   .reshape({dim4[1], dim4[2]});
+    auto rhs = y.slice(rhs_slice_begin, rhs_slice_end, strides)
+                   .reshape({dim4[2], dim4[3]});
+
+    auto out_slice = out.slice({b, 0, 0}, {b + 1, dim4[1], dim4[3]}, strides);
+    out_slice = out_slice.reshape({dim4[1], dim4[3]});
+    ring_mmul_(out_slice, lhs, rhs);
+  }
+
+  ring_add_(out, x1y0);
+  ring_add_(out, task.get());
+  return out.as(x.eltype());
+}
+
+void BatchMatMulAV::evaluate(KernelEvalContext* ctx) const {
+  const auto& lhs = ctx->getParam<Value>(0);
+  const auto& rhs = ctx->getParam<Value>(1);
+  auto xs = lhs.shape();
+  auto ys = rhs.shape();
+  SPU_ENFORCE(xs.ndim() == ys.ndim(), "ndim mismatch: lhs={}, rhs={}", xs, ys);
+  SPU_ENFORCE(xs[0] == ys[0], "batch mismatch: lhs={}, rhs={}", xs, ys);
+  SPU_ENFORCE(xs[2] == ys[1], "shape mismatch: lhs={}, rhs={}", xs, ys);
+  ctx->setOutput(WrapValue(proc(ctx, lhs.data(), rhs.data())));
+}
+
+// A is (B, M, K); B is (B, K, N)
+NdArrayRef BatchMatMulAV::proc(KernelEvalContext* ctx, const NdArrayRef& x,
+                               const NdArrayRef& y) const {
+  if (0 == x.numel() || 0 == y.numel()) {
+    return NdArrayRef(x.eltype(), {x.shape()[0], y.shape()[1]});
+  }
+  SPU_ENFORCE(x.ndim() == 3 && y.ndim() == 3);
+  SPU_ENFORCE_EQ(x.shape()[0], y.shape()[0]);
+  SPU_ENFORCE_EQ(x.shape()[2], y.shape()[1]);
+
+  auto* comm = ctx->getState<Communicator>();
+  auto* dot_prot = ctx->getState<CheetahDotState>()->get();
+  const int rank = comm->getRank();
+  const auto* ptype = y.eltype().as<Priv2kTy>();
+  SPU_ENFORCE(ptype != nullptr, "rhs should be a private type");
+  const int owner = ptype->owner();
+
+  // (x0 + x1)*y = <x0 * y>_0 + <x0 * y>_1 + x1 * y
+  const Shape4D dim4 = {x.shape()[0], x.shape()[1], x.shape()[2], y.shape()[2]};
+
+  NdArrayRef out;
+  if (rank != owner) {
+    out = dot_prot->BatchDotOLE(x, comm->lctx().get(), dim4, true);
+  } else {
+    out = dot_prot->BatchDotOLE(y, comm->lctx().get(), dim4, false);
+
+    const Strides strides(x.shape().size(), 1);
+    Index lhs_slice_end(x.shape().begin(), x.shape().end());
+    Index rhs_slice_end(y.shape().begin(), y.shape().end());
+    Index lhs_slice_begin(3, 0);
+    Index rhs_slice_begin(3, 0);
+
+    for (int64_t b = 0; b < dim4[0]; ++b) {
+      lhs_slice_begin[0] = b;
+      lhs_slice_end[0] = b + 1;
+      rhs_slice_begin[0] = b;
+      rhs_slice_end[0] = b + 1;
+      auto lhs = x.slice(lhs_slice_begin, lhs_slice_end, strides)
+                     .reshape({dim4[1], dim4[2]});
+      auto rhs = y.slice(rhs_slice_begin, rhs_slice_end, strides)
+                     .reshape({dim4[2], dim4[3]});
+      auto local = ring_mmul(lhs, rhs);
+
+      auto out_slice = out.slice({b, 0, 0}, {b + 1, dim4[1], dim4[3]}, strides);
+      out_slice = out_slice.reshape({dim4[1], dim4[3]});
+      ring_add_(out_slice, local);
+    }
+  }
+
   return out.as(x.eltype());
 }
 

@@ -19,14 +19,14 @@
 
 #include "libspu/core/type.h"
 #include "libspu/mpc/cheetah/ot/basic_ot_prot.h"
-#include "libspu/mpc/cheetah/ot/ot_util.h"
+#include "libspu/mpc/cheetah/ot/util.h"
 #include "libspu/mpc/cheetah/type.h"
 #include "libspu/mpc/common/communicator.h"
 #include "libspu/mpc/utils/ring_ops.h"
 
 namespace spu::mpc::cheetah {
 
-CompareProtocol::CompareProtocol(const std::shared_ptr<BasicOTProtocols>& base,
+CompareProtocol::CompareProtocol(std::shared_ptr<BasicOTProtocols> base,
                                  size_t compare_radix)
     : compare_radix_(compare_radix), basic_ot_prot_(base) {
   SPU_ENFORCE(base != nullptr);
@@ -37,18 +37,23 @@ CompareProtocol::CompareProtocol(const std::shared_ptr<BasicOTProtocols>& base,
 CompareProtocol::~CompareProtocol() { basic_ot_prot_->Flush(); }
 
 void SetLeafOTMsg(absl::Span<uint8_t> ot_messages, uint8_t digit,
-                  uint8_t rnd_cmp_bit, uint8_t rnd_eq_bit, bool gt) {
+                  uint8_t rnd_cmp_bit, uint8_t rnd_eq_bit, bool gt,
+                  size_t batch_shift = 0) {
   size_t N = ot_messages.size();
-  SPU_ENFORCE(digit <= N, fmt::format("N={} got digit={}", N, digit));
+  SPU_ENFORCE(digit <= N, "N={} got digit={}", N, digit);
   for (size_t i = 0; i < N; i++) {
+    uint8_t eq_cmp = 0;
     if (gt) {
-      ot_messages[i] = rnd_cmp_bit ^ static_cast<uint8_t>(digit > i);
+      eq_cmp = rnd_cmp_bit ^ static_cast<uint8_t>(digit > i);
     } else {
-      ot_messages[i] = rnd_cmp_bit ^ static_cast<uint8_t>(digit < i);
+      eq_cmp = rnd_cmp_bit ^ static_cast<uint8_t>(digit < i);
     }
-
     // compact two bits into one OT message
-    ot_messages[i] |= ((rnd_eq_bit ^ static_cast<uint8_t>(digit == i)) << 1);
+    eq_cmp |= ((rnd_eq_bit ^ static_cast<uint8_t>(digit == i)) << 1);
+
+    // compact batch eq and cmp bits into one OT message
+    // NOTE(lwj) Now only support Batch size <= 4
+    ot_messages[i] |= (eq_cmp << batch_shift);
   }
 }
 
@@ -58,6 +63,10 @@ NdArrayRef CompareProtocol::DoCompute(const NdArrayRef& inp, bool greater_than,
                                       NdArrayRef* keep_eq, int64_t bitwidth) {
   SPU_ENFORCE(inp.shape().size() == 1, "need 1D array");
   auto field = inp.eltype().as<Ring2k>()->field();
+  // align to multiple of compare radix
+  if ((bitwidth % compare_radix_) != 0) {
+    bitwidth = CeilDiv<int64_t>(bitwidth, compare_radix_) * compare_radix_;
+  }
   int64_t num_digits = CeilDiv(bitwidth, (int64_t)compare_radix_);
   size_t radix = static_cast<size_t>(1) << compare_radix_;  // one-of-N OT
   int64_t num_cmp = inp.numel();
@@ -164,13 +173,292 @@ NdArrayRef CompareProtocol::DoCompute(const NdArrayRef& inp, bool greater_than,
   return _gt.as(boolean_t);
 }
 
+NdArrayRef CompareProtocol::DoBatchCompute(const NdArrayRef& inp,
+                                           bool greater_than, int64_t numelt,
+                                           int64_t bitwidth,
+                                           int64_t batch_size) {
+  auto field = inp.eltype().as<Ring2k>()->field();
+  SPU_ENFORCE(batch_size);
+  SPU_ENFORCE(bitwidth > 0 && bitwidth <= (int)SizeOf(field) * 8);
+
+  if (bitwidth % compare_radix_ != 0) {
+    bitwidth = CeilDiv<int64_t>(bitwidth, compare_radix_) * compare_radix_;
+  }
+
+  int64_t num_digits = CeilDiv<int64_t>(bitwidth, compare_radix_);
+  size_t radix = static_cast<size_t>(1) << compare_radix_;  // one-of-N OT
+  size_t num_cmp = numelt * batch_size;
+  // init to all zero
+  std::vector<uint8_t> digits(inp.numel() * num_digits, 0);
+
+  // Step 1 break into digits \in [0, radix)
+  DISPATCH_ALL_FIELDS(field, "break_digits", [&]() {
+    using u2k = std::make_unsigned<ring2k_t>::type;
+    const auto mask_radix = makeBitsMask<u2k>(compare_radix_);
+    NdArrayView<u2k> xinp(inp);
+
+    for (int64_t i = 0; i < inp.numel(); ++i) {
+      for (int64_t j = 0; j < num_digits; ++j) {
+        uint32_t shft = j * compare_radix_;
+        digits[i * num_digits + j] = (xinp[i] >> shft) & mask_radix;
+      }
+    }
+  });
+
+  std::vector<uint8_t> leaf_cmp(num_cmp * num_digits, 0);
+  std::vector<uint8_t> leaf_eq(num_cmp * num_digits, 0);
+  if (is_sender_) {
+    // NOTE(lwj): sender holds the batched message and receiver inputs the
+    // choice bits
+    // Step 2 sample random bits
+    yacl::crypto::Prg<uint8_t> prg;
+    prg.Fill(absl::MakeSpan(leaf_cmp));
+    prg.Fill(absl::MakeSpan(leaf_eq));
+    // convert to boolean
+    std::transform(leaf_cmp.begin(), leaf_cmp.end(), leaf_cmp.data(),
+                   [](uint8_t v) { return v & 1; });
+    std::transform(leaf_eq.begin(), leaf_eq.end(), leaf_eq.data(),
+                   [](uint8_t v) { return v & 1; });
+
+    // Step 6-7 set the OT messages with two packed bits (one for compare, one
+    // for equal)
+    std::vector<uint8_t> _leaf_ot_msg(radix * numelt * num_digits, 0);
+    auto leaf_ot_msg = absl::MakeSpan(_leaf_ot_msg);
+    std::vector<absl::Span<uint8_t> > each_leaf_ot_msg(numelt * num_digits);
+    for (size_t i = 0; i < each_leaf_ot_msg.size(); ++i) {
+      each_leaf_ot_msg[i] = leaf_ot_msg.subspan(i * radix, radix);
+    }
+
+    for (int64_t i = 0; i < numelt; ++i) {
+      for (int64_t j = 0; j < batch_size; ++j) {
+        auto* this_ot_msg = each_leaf_ot_msg.data() + i * num_digits;
+        auto* this_digit = digits.data() + (i * batch_size + j) * num_digits;
+        auto* this_leaf_cmp =
+            leaf_cmp.data() + (i * batch_size + j) * num_digits;
+        auto* this_leaf_eq = leaf_eq.data() + (i * batch_size + j) * num_digits;
+
+        for (int64_t k = 0; k < num_digits; ++k) {
+          uint8_t rnd_cmp = this_leaf_cmp[k];
+          uint8_t rnd_eq = this_leaf_eq[k];
+          SetLeafOTMsg(this_ot_msg[k], this_digit[k], rnd_cmp, rnd_eq,
+                       greater_than, /*offset*/ j * 2);
+        }
+      }
+    }
+
+    // Step 9: sender of n*M instances of 1-of-N OT
+    basic_ot_prot_->GetSenderCOT()->SendCMCC(leaf_ot_msg, radix,
+                                             /*ot_bitwidth*/ batch_size * 2);
+    basic_ot_prot_->GetSenderCOT()->Flush();
+  } else {
+    // Step 10: receiver of 1-of-N OT
+    std::vector<uint8_t> packed_cmp(numelt * num_digits, 0);
+    basic_ot_prot_->GetReceiverCOT()->RecvCMCC(
+        absl::MakeConstSpan(digits), radix, absl::MakeSpan(packed_cmp),
+        /*bitwidth*/ batch_size * 2);
+
+    // extract equality bits from packed messages
+    // See `SetLeafOTMsg`
+    // Need to unpack the cmp array from batch
+    // eq_n||cmp_n||eq_n-1||cmp_n-1||...||eq0||cmp0
+    for (int64_t i = 0; i < numelt; ++i) {
+      auto* this_pack_cmp = packed_cmp.data() + i * num_digits;
+      for (int64_t j = 0; j < batch_size; ++j) {
+        auto* this_leaf_cmp =
+            leaf_cmp.data() + (i * batch_size + j) * num_digits;
+        auto* this_leaf_eq = leaf_eq.data() + (i * batch_size + j) * num_digits;
+        for (int64_t k = 0; k < num_digits; ++k) {
+          this_leaf_eq[k] = (this_pack_cmp[k] >> (j * 2 + 1)) & 1;
+          this_leaf_cmp[k] = (this_pack_cmp[k] >> (j * 2)) & 1;
+        }
+      }
+    }
+  }
+
+  auto boolean_t = makeType<BShrTy>(field, 1);
+  NdArrayRef prev_cmp =
+      ring_zeros(field, {static_cast<int64_t>(num_digits * num_cmp)})
+          .as(boolean_t);
+  NdArrayRef prev_eq =
+      ring_zeros(field, {static_cast<int64_t>(num_digits * num_cmp)})
+          .as(boolean_t);
+
+  DISPATCH_ALL_FIELDS(field, "extract_ot_msg", [&]() {
+    NdArrayView<ring2k_t> xprev_cmp(prev_cmp);
+    NdArrayView<ring2k_t> xprev_eq(prev_eq);
+    pforeach(0, xprev_cmp.numel(), [&](int64_t i) {
+      xprev_cmp[i] = leaf_cmp[i];
+      xprev_eq[i] = leaf_eq[i];
+    });
+  });
+
+  // Step 12 - 17. Evaluate the traversal AND
+  return TraversalAND(prev_cmp, prev_eq, num_cmp, num_digits).as(boolean_t);
+}
+
+NdArrayRef CompareProtocol::TraversalAND(const NdArrayRef& cmp, NdArrayRef eq,
+                                         size_t num_input, size_t num_digits) {
+  if (absl::has_single_bit(num_digits)) {
+    // If the num_digits is a power of two,
+    // call the TraversalAND and return
+    return TraversalANDFullBinaryTree(cmp, eq, num_input, num_digits);
+  }
+
+  // If the num_digits is not a power of two, we split the input into many sub-
+  // full binary trees. And traversal on the subtrees consequently
+  size_t remain_num_digits = num_digits;
+  size_t current_num_digits = absl::bit_floor(remain_num_digits);
+
+  // Save the current_num_digits data for each input
+  NdArrayRef current_cmp(
+      cmp.eltype(), {static_cast<int64_t>(current_num_digits * num_input)});
+  NdArrayRef current_eq(eq.eltype(), current_cmp.shape());
+  pforeach(0, num_input, [&](int64_t idx) {
+    std::memcpy(&current_cmp.at(idx * current_num_digits),
+                &cmp.at(idx * num_digits), current_num_digits * cmp.elsize());
+    std::memcpy(&current_eq.at(idx * current_num_digits),
+                &eq.at(idx * num_digits), current_num_digits * eq.elsize());
+  });
+
+  auto cmp_res =
+      TraversalAND(current_cmp, current_eq, num_input, current_num_digits);
+
+  // Update remain num digits
+  remain_num_digits = remain_num_digits - current_num_digits + 1;
+
+  while (remain_num_digits != 1) {
+    current_num_digits = absl::bit_floor(remain_num_digits);
+    current_cmp = NdArrayRef(
+        cmp.eltype(), {static_cast<int64_t>(current_num_digits * num_input)});
+    current_eq = NdArrayRef(eq.eltype(), current_cmp.shape());
+
+    pforeach(0, num_input, [&](int64_t idx) {
+      // Copy the cmp_res to the first digit in current_cmp
+      std::memcpy(&current_cmp.at(idx * current_num_digits), &cmp_res.at(idx),
+                  cmp.elsize());
+
+      // Copy the next (current_num_digits - 1) digits from cmp array
+      // which has not been compared
+      std::memcpy(&current_cmp.at(idx * current_num_digits + 1),
+                  &cmp.at((idx + 1) * num_digits - remain_num_digits + 1),
+                  (current_num_digits - 1) * cmp.elsize());
+
+      // We skip the left-most eq_res, which is unnecessary for next loop
+
+      // Copy the next (current_num_digits - 1) digits from eq array
+      // which has not been compared
+      std::memcpy(&current_eq.at(idx * current_num_digits + 1),
+                  &eq.at((idx + 1) * num_digits - remain_num_digits + 1),
+                  (current_num_digits - 1) * eq.elsize());
+    });
+
+    cmp_res =
+        TraversalAND(current_cmp, current_eq, num_input, current_num_digits);
+    remain_num_digits = remain_num_digits - current_num_digits + 1;
+  }
+  return cmp_res;
+}
+
+std::array<NdArrayRef, 2> CompareProtocol::TraversalANDWithEq(
+    const NdArrayRef& cmp, const NdArrayRef& eq, size_t num_input,
+    size_t num_digits) {
+  if (absl::has_single_bit(num_digits) == 1) {
+    return TraversalANDWithEqFullBinaryTree(cmp, eq, num_input, num_digits);
+  }
+
+  // NOTE(jingyu):
+  //  If the num_digits is not a power of two,
+  //  1.Init the remain_num_digits = num_digits;
+  //  2.We choose the the maximal value current_num_digits,
+  //    such that current_num_digits is a power of two
+  //    and current_num_digits <= remain_num_digitis.
+  //  3.Call TraversalANDWithEq function to compare the current_num_digits.
+  //    (remain_num_digits -= current_num_digits);
+  //  4.Add the one digit compare result to remain_num_digits;
+  //  5.Loop 2 - 4 until the remain_num_digits = 1, get the final result;
+  //  We need to use this method in num_input
+  // For example num_digits = 5
+  // Input
+  // cmp[1]||cmp[2]||cmp[3]||cmp[4]||cmp[5]...
+  // eq[1] ||eq[2] ||eq[3] ||eq[4] ||eq[5]...
+  // First call TraversalANDWithEq: on [1...4]
+  // Add the compare result to the remain digits: 5 - 4 + 1 = 2;
+  // cmp_res[1..4]||cmp[5]...
+  // eq_res[1..4] ||eq[5]...
+  // Second call TraversalANDWithEq: on the remains 2 digits
+  // Get the final result
+
+  // Init the remain_num_digits = num_digits
+  size_t remain_num_digits = num_digits;
+
+  // Choose the maximal value current_num_digits
+  // such that current_num_digits is a power of two
+  // and current_num_digits <= remain_num_digitis.
+  size_t current_num_digits = absl::bit_floor(remain_num_digits);
+
+  // Save the current_num_digits data for each input
+  NdArrayRef current_cmp(
+      cmp.eltype(), {static_cast<int64_t>(current_num_digits * num_input)});
+  NdArrayRef current_eq(eq.eltype(), current_cmp.shape());
+
+  // Copy from cmp to current_cmp
+  // Copy from eq to current_eq
+  pforeach(0, num_input, [&](int64_t idx) {
+    std::memcpy(&current_cmp.at(idx * current_num_digits),
+                &cmp.at(idx * num_digits), current_num_digits * cmp.elsize());
+    std::memcpy(&current_eq.at(idx * current_num_digits),
+                &eq.at(idx * num_digits), current_num_digits * eq.elsize());
+  });
+
+  // Calculate the low current_num_digits in cmp result
+  NdArrayRef cmp_res;
+  NdArrayRef eq_res;
+  auto [_cmp_res, _eq_res] = TraversalANDWithEq(current_cmp, current_eq,
+                                                num_input, current_num_digits);
+  // NOTE(lwj): auto unbox is a C++20 feature
+  cmp_res = _cmp_res;
+  eq_res = _eq_res;
+
+  // Update the remain_num_digits
+  remain_num_digits = remain_num_digits - current_num_digits + 1;
+
+  while (remain_num_digits != 1) {
+    current_num_digits = absl::bit_floor(remain_num_digits);
+    current_cmp = NdArrayRef(
+        cmp.eltype(), {static_cast<int64_t>(current_num_digits * num_input)});
+    current_eq = NdArrayRef(eq.eltype(), current_cmp.shape());
+
+    pforeach(0, num_input, [&](int64_t idx) {
+      // Copy the cmp_res to the first digit in current_cmp
+      std::memcpy(&current_cmp.at(idx * current_num_digits), &cmp_res.at(idx),
+                  cmp.elsize());
+
+      // Copy the next (current_num_digits - 1) digits from cmp array
+      // which has not been compared
+      std::memcpy(&current_cmp.at(idx * current_num_digits + 1),
+                  &cmp.at((idx + 1) * num_digits - remain_num_digits + 1),
+                  (current_num_digits - 1) * cmp.elsize());
+
+      // Copy from eq_res
+      std::memcpy(&current_eq.at(idx * current_num_digits), &eq_res.at(idx),
+                  eq.elsize());
+
+      // Copy from eq
+      std::memcpy(&current_eq.at(idx * current_num_digits + 1),
+                  &eq.at((idx + 1) * num_digits - remain_num_digits + 1),
+                  (current_num_digits - 1) * eq.elsize());
+    });
+    auto [_cmp, _eq] = TraversalANDWithEq(current_cmp, current_eq, num_input,
+                                          current_num_digits);
+    cmp_res = _cmp;
+    eq_res = _eq;
+    remain_num_digits = remain_num_digits - current_num_digits + 1;
+  }
+  return {cmp_res, eq_res};
+}
+
 std::array<NdArrayRef, 2> CompareProtocol::TraversalANDWithEqFullBinaryTree(
     NdArrayRef cmp, NdArrayRef eq, size_t num_input, size_t num_digits) {
-  SPU_ENFORCE(num_digits > 0 && absl::has_single_bit(num_digits),
-              "require num_digits be a 2-power");
-  if (num_digits == 1) {
-    return {cmp, eq};
-  }
   SPU_ENFORCE(cmp.shape().size() == 1, "need 1D array");
   SPU_ENFORCE_EQ(cmp.shape(), eq.shape());
   SPU_ENFORCE_EQ(cmp.numel(), eq.numel());
@@ -202,76 +490,10 @@ std::array<NdArrayRef, 2> CompareProtocol::TraversalANDWithEqFullBinaryTree(
   return {cmp, eq};
 }
 
-std::array<NdArrayRef, 2> CompareProtocol::TraversalANDWithEq(
-    NdArrayRef cmp, NdArrayRef eq, size_t num_input, size_t num_digits) {
-  if (absl::has_single_bit(num_digits)) {
-    return TraversalANDWithEqFullBinaryTree(cmp, eq, num_input, num_digits);
-  }
-
-  // Split the current tree into two subtrees
-  size_t current_num_digits = absl::bit_floor(num_digits);
-
-  Shape current_shape({static_cast<int64_t>(current_num_digits * num_input)});
-  NdArrayRef current_cmp(cmp.eltype(), current_shape);
-  NdArrayRef current_eq(eq.eltype(), current_shape);
-  // Copy from the CMP and EQ bits for the current sub-full-tree
-  pforeach(0, num_input, [&](int64_t i) {
-    std::memcpy(&current_cmp.at(i * current_num_digits),
-                &cmp.at(i * num_digits), current_num_digits * cmp.elsize());
-    std::memcpy(&current_eq.at(i * current_num_digits), &eq.at(i * num_digits),
-                current_num_digits * eq.elsize());
-  });
-
-  auto [_cmp, _eq] = TraversalANDWithEqFullBinaryTree(
-      current_cmp, current_eq, num_input, current_num_digits);
-  // NOTE(lwj): auto unbox is a C++20 feature
-  NdArrayRef subtree_cmp = _cmp;
-  NdArrayRef subtree_eq = _eq;
-
-  // NOTE(lwj): +1 due to the AND on the sub-full-tree
-  size_t remain_num_digits = num_digits - current_num_digits + 1;
-  while (remain_num_digits > 1) {
-    current_num_digits = absl::bit_floor(remain_num_digits);
-    Shape current_shape({static_cast<int64_t>(current_num_digits * num_input)});
-    NdArrayRef current_cmp(cmp.eltype(), current_shape);
-    NdArrayRef current_eq(eq.eltype(), current_shape);
-
-    pforeach(0, num_input, [&](int64_t i) {
-      // copy subtree result as the 1st digit
-      std::memcpy(&current_cmp.at(i * current_num_digits), &subtree_cmp.at(i),
-                  1 * cmp.elsize());
-      std::memcpy(&current_eq.at(i * current_num_digits), &subtree_eq.at(i),
-                  1 * eq.elsize());
-
-      // copy the remaining digits from the input 'cmp' and 'eq'
-      std::memcpy(&current_cmp.at(i * current_num_digits + 1),
-                  &cmp.at((i + 1) * num_digits - remain_num_digits + 1),
-                  (current_num_digits - 1) * cmp.elsize());
-      std::memcpy(&current_eq.at(i * current_num_digits + 1),
-                  &eq.at((i + 1) * num_digits - remain_num_digits + 1),
-                  (current_num_digits - 1) * eq.elsize());
-    });
-
-    // NOTE(lwj): current_num_digits is not a 2-power
-    auto [_cmp, _eq] = TraversalANDWithEq(current_cmp, current_eq, num_input,
-                                          current_num_digits);
-    subtree_cmp = _cmp;
-    subtree_eq = _eq;
-    remain_num_digits = remain_num_digits - current_num_digits + 1;
-  }
-
-  return {subtree_cmp, subtree_eq};
-}
-
 NdArrayRef CompareProtocol::TraversalANDFullBinaryTree(NdArrayRef cmp,
                                                        NdArrayRef eq,
                                                        size_t num_input,
                                                        size_t num_digits) {
-  SPU_ENFORCE(num_digits > 0 && absl::has_single_bit(num_digits),
-              "require num_digits be a 2-power");
-  if (num_digits == 1) {
-    return cmp;
-  }
   // Tree-based traversal ANDs
   // lt0[0], lt0[1], ..., lt0[M],
   // lt1[0], lt1[1], ..., lt1[M],
@@ -376,62 +598,6 @@ NdArrayRef CompareProtocol::TraversalANDFullBinaryTree(NdArrayRef cmp,
   return cmp;
 }
 
-NdArrayRef CompareProtocol::TraversalAND(NdArrayRef cmp, NdArrayRef eq,
-                                         size_t num_input, size_t num_digits) {
-  if (absl::has_single_bit(num_digits)) {
-    return TraversalANDFullBinaryTree(cmp, eq, num_input, num_digits);
-  }
-
-  // Split the current tree into two subtrees
-  size_t current_num_digits = absl::bit_floor(num_digits);
-
-  Shape current_shape({static_cast<int64_t>(current_num_digits * num_input)});
-  NdArrayRef current_cmp(cmp.eltype(), current_shape);
-  NdArrayRef current_eq(eq.eltype(), current_shape);
-  // Copy from the CMP and EQ bits for the current sub-full-tree
-  pforeach(0, num_input, [&](int64_t i) {
-    std::memcpy(&current_cmp.at(i * current_num_digits),
-                &cmp.at(i * num_digits), current_num_digits * cmp.elsize());
-    std::memcpy(&current_eq.at(i * current_num_digits), &eq.at(i * num_digits),
-                current_num_digits * eq.elsize());
-  });
-
-  NdArrayRef subtree_cmp = TraversalANDFullBinaryTree(
-      current_cmp, current_eq, num_input, current_num_digits);
-
-  // NOTE(lwj): +1 due to the AND on the sub-full-tree
-  size_t remain_num_digits = num_digits - current_num_digits + 1;
-  while (remain_num_digits > 1) {
-    current_num_digits = absl::bit_floor(remain_num_digits);
-    Shape current_shape({static_cast<int64_t>(current_num_digits * num_input)});
-    NdArrayRef current_cmp(cmp.eltype(), current_shape);
-    NdArrayRef current_eq(eq.eltype(), current_shape);
-
-    pforeach(0, num_input, [&](int64_t i) {
-      // copy subtree result as the 1st digit
-      std::memcpy(&current_cmp.at(i * current_num_digits), &subtree_cmp.at(i),
-                  1 * cmp.elsize());
-      // copy the remaining digits from the input 'cmp'
-      std::memcpy(&current_cmp.at(i * current_num_digits + 1),
-                  &cmp.at((i + 1) * num_digits - remain_num_digits + 1),
-                  (current_num_digits - 1) * cmp.elsize());
-
-      // copy the remaining digits from the input 'eq'
-      // we skip the left-most equal which is unnecessary
-      std::memcpy(&current_eq.at(i * current_num_digits + 1),
-                  &eq.at((i + 1) * num_digits - remain_num_digits + 1),
-                  (current_num_digits - 1) * eq.elsize());
-    });
-
-    // NOTE(lwj): current_num_digits is not a 2-power
-    subtree_cmp =
-        TraversalAND(current_cmp, current_eq, num_input, current_num_digits);
-    remain_num_digits = remain_num_digits - current_num_digits + 1;
-  }
-
-  return subtree_cmp;
-}
-
 NdArrayRef CompareProtocol::Compute(const NdArrayRef& inp, bool greater_than,
                                     int64_t bitwidth) {
   int64_t bw = SizeOf(inp.eltype().as<Ring2k>()->field()) * 8;
@@ -444,6 +610,26 @@ NdArrayRef CompareProtocol::Compute(const NdArrayRef& inp, bool greater_than,
   auto flatten = inp.reshape({inp.numel()});
   return DoCompute(flatten, greater_than, nullptr, bitwidth)
       .reshape(inp.shape());
+}
+
+NdArrayRef CompareProtocol::BatchCompute(const NdArrayRef& inp,
+                                         bool greater_than, int64_t numel,
+                                         int64_t bitwidth, int64_t batch_size) {
+  int64_t bw = SizeOf(inp.eltype().as<Ring2k>()->field()) * 8;
+  SPU_ENFORCE(bitwidth >= 0 && bitwidth <= bw, "bit_width={} out of bound",
+              bitwidth);
+  if (is_sender_) {
+    SPU_ENFORCE_EQ(inp.numel(), numel * batch_size);
+  } else {
+    SPU_ENFORCE_EQ(inp.numel(), numel);
+  }
+
+  if (bitwidth == 0) {
+    bitwidth = bw;
+  }
+
+  auto flatten = inp.reshape({inp.numel()});
+  return DoBatchCompute(flatten, greater_than, numel, bitwidth, batch_size);
 }
 
 std::array<NdArrayRef, 2> CompareProtocol::ComputeWithEq(const NdArrayRef& inp,

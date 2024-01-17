@@ -19,8 +19,45 @@
 #include "yacl/link/context.h"
 
 #include "libspu/core/ndarray_ref.h"
+#include "libspu/mpc/cheetah/rlwe/types.h"
 
 namespace spu::mpc::cheetah {
+
+class CheetahMul;
+
+// Note(lwj): export some APIs for other use
+class CheetahMulImpl {
+ public:
+  explicit CheetahMulImpl(std::shared_ptr<yacl::link::Context> lctx,
+                          bool allow_high_prob_one_bit_error = false);
+
+  ~CheetahMulImpl();
+
+  void Initialize(FieldType field);
+
+  int Rank() const;
+
+  size_t OLEBatchSize() const;
+
+  std::vector<RLWECt> EncryptArray(const NdArrayRef& inp);
+
+  NdArrayRef MultiplyThenMask(const NdArrayRef& inp,
+                              absl::Span<RLWECt> recv_ct);
+
+  std::vector<RLWECt> RecvEncryptedArray(FieldType field, int64_t numel,
+                                         yacl::link::Context* conn = nullptr);
+
+  NdArrayRef RecvMulArray(FieldType field, int64_t numel,
+                          yacl::link::Context* conn = nullptr);
+
+ private:
+  friend class CheetahMul;
+  NdArrayRef MulOLE(const NdArrayRef& inp, yacl::link::Context* conn,
+                    bool is_evaluator, uint32_t msg_width_hint = 0);
+
+  struct Impl;
+  std::unique_ptr<Impl> impl_{nullptr};
+};
 
 // Implementation for Mul
 // Ref: Rathee et al. "Improved Multiplication Triple Generation over Rings
@@ -39,24 +76,20 @@ class CheetahMul {
 
   CheetahMul(CheetahMul&&) = delete;
 
-  void LazyInitKeys(FieldType field, uint32_t msg_width_hint = 0);
-
-  // NOTE: make sure to call InitKeys first
   NdArrayRef MulOLE(const NdArrayRef& inp, yacl::link::Context* conn,
                     bool is_evaluator, uint32_t msg_width_hint = 0);
 
-  // NOTE: make sure to call InitKeys first
   NdArrayRef MulOLE(const NdArrayRef& inp, bool is_evaluator,
                     uint32_t msg_width_hint = 0);
+
+  CheetahMulImpl* getImpl() { return impl_.get(); }
 
   int Rank() const;
 
   size_t OLEBatchSize() const;
 
  private:
-  struct Impl;
-
-  std::unique_ptr<Impl> impl_{nullptr};
+  std::shared_ptr<CheetahMulImpl> impl_{nullptr};
 };
 
 }  // namespace spu::mpc::cheetah

@@ -38,7 +38,10 @@ spu_cc_library(
 
 spu_cc_library(
     name = "cheetah_mul",
-    srcs = ["cheetah_mul.cc"],
+    srcs = [
+        "cheetah_mul.cc",
+        "cheetah_mul_impl.cc",
+    ],
     hdrs = ["cheetah_mul.h"],
     deps = [":arith_comm"],
 )
@@ -49,6 +52,17 @@ spu_cc_library(
     hdrs = ["matmat_prot.h"],
     deps = [
         ":arith_comm",
+        "//libspu/mpc/cheetah/rlwe:lwe",
+    ],
+)
+
+spu_cc_library(
+    name = "binmatvec_prot",
+    srcs = [ "binmatvec_prot.cc" ],
+    hdrs = ["binmatvec_prot.h"],
+    deps = [
+      ":arith_comm", 
+      "//libspu/mpc/cheetah/rlwe:lwe"
     ],
 )
 

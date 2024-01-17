@@ -23,36 +23,32 @@
 #include "libspu/mpc/utils/simulate.h"
 
 namespace spu::mpc::cheetah::test {
-template <typename T>
-T makeBitsMask(size_t nbits) {
-  size_t max = sizeof(T) * 8;
-  if (nbits == 0) {
-    nbits = max;
-  }
-  SPU_ENFORCE(nbits <= max);
-  T mask = static_cast<T>(-1);
-  if (nbits < max) {
-    mask = (static_cast<T>(1) << nbits) - 1;
-  }
-  return mask;
-}
 
-class BasicOTProtTest : public ::testing::TestWithParam<FieldType> {
+class BasicOTProtTest
+    : public ::testing::TestWithParam<
+          std::tuple<FieldType, BasicOTProtocols::FerretOTImpl>> {
   void SetUp() override {}
 };
 
 INSTANTIATE_TEST_SUITE_P(
     Cheetah, BasicOTProtTest,
-    testing::Values(FieldType::FM32, FieldType::FM64, FieldType::FM128),
+    testing::Combine(testing::Values(FieldType::FM32, FieldType::FM64,
+                                     FieldType::FM128),
+                     testing::Values(BasicOTProtocols::FerretOTImpl::emp,
+                                     BasicOTProtocols::FerretOTImpl::yacl)),
     [](const testing::TestParamInfo<BasicOTProtTest::ParamType>& p) {
-      return fmt::format("{}", p.param);
+      return fmt::format(
+          "{}IsYaclImpl{}", std::get<0>(p.param),
+          std::get<1>(p.param) == BasicOTProtocols::FerretOTImpl::yacl
+              ? "True"
+              : "False");
     });
 
 TEST_P(BasicOTProtTest, SingleB2A) {
   size_t kWorldSize = 2;
   Shape shape = {10, 30};
-  FieldType field = GetParam();
-
+  FieldType field = std::get<0>(GetParam());
+  BasicOTProtocols::FerretOTImpl ferret_impl = std::get<1>(GetParam());
   size_t nbits = 8 * SizeOf(field) - 1;
   size_t packed_nbits = 8 * SizeOf(field) - nbits;
   auto boolean_t = makeType<BShrTy>(field, packed_nbits);
@@ -63,12 +59,10 @@ TEST_P(BasicOTProtTest, SingleB2A) {
     auto mask = static_cast<ring2k_t>(-1);
     if (nbits > 0) {
       mask = (static_cast<ring2k_t>(1) << packed_nbits) - 1;
-      NdArrayView<ring2k_t> xb0(bshr0);
-      NdArrayView<ring2k_t> xb1(bshr1);
-      pforeach(0, xb0.numel(), [&](int64_t i) {
-        xb0[i] &= mask;
-        xb1[i] &= mask;
-      });
+      auto xb0 = NdArrayView<ring2k_t>(bshr0);
+      auto xb1 = NdArrayView<ring2k_t>(bshr1);
+      pforeach(0, xb0.numel(), [&](int64_t i) { xb0[i] &= mask; });
+      pforeach(0, xb1.numel(), [&](int64_t i) { xb1[i] &= mask; });
     }
   });
 
@@ -76,7 +70,7 @@ TEST_P(BasicOTProtTest, SingleB2A) {
   NdArrayRef ashr1;
   utils::simulate(kWorldSize, [&](std::shared_ptr<yacl::link::Context> ctx) {
     auto conn = std::make_shared<Communicator>(ctx);
-    BasicOTProtocols ot_prot(conn);
+    BasicOTProtocols ot_prot(conn, ferret_impl);
     if (ctx->Rank() == 0) {
       ashr0 = ot_prot.B2A(bshr0);
     } else {
@@ -88,10 +82,10 @@ TEST_P(BasicOTProtTest, SingleB2A) {
   EXPECT_EQ(shape, ashr0.shape());
 
   DISPATCH_ALL_FIELDS(field, "", [&]() {
-    NdArrayView<ring2k_t> b0(bshr0);
-    NdArrayView<ring2k_t> b1(bshr1);
-    NdArrayView<ring2k_t> a0(ashr0);
-    NdArrayView<ring2k_t> a1(ashr1);
+    auto b0 = NdArrayView<ring2k_t>(bshr0);
+    auto b1 = NdArrayView<ring2k_t>(bshr1);
+    auto a0 = NdArrayView<ring2k_t>(ashr0);
+    auto a1 = NdArrayView<ring2k_t>(ashr1);
     auto mask = static_cast<ring2k_t>(-1);
     if (nbits > 0) {
       mask = (static_cast<ring2k_t>(1) << packed_nbits) - 1;
@@ -107,9 +101,10 @@ TEST_P(BasicOTProtTest, SingleB2A) {
 TEST_P(BasicOTProtTest, PackedB2A) {
   size_t kWorldSize = 2;
   Shape shape = {11, 12, 13};
-  FieldType field = GetParam();
+  FieldType field = std::get<0>(GetParam());
+  BasicOTProtocols::FerretOTImpl ferret_impl = std::get<1>(GetParam());
 
-  for (size_t nbits : {1, 2}) {
+  for (size_t nbits : {1, 30}) {
     size_t packed_nbits = 8 * SizeOf(field) - nbits;
     auto boolean_t = makeType<BShrTy>(field, packed_nbits);
 
@@ -119,12 +114,10 @@ TEST_P(BasicOTProtTest, PackedB2A) {
       auto mask = static_cast<ring2k_t>(-1);
       if (nbits > 0) {
         mask = (static_cast<ring2k_t>(1) << packed_nbits) - 1;
-        NdArrayView<ring2k_t> xb0(bshr0);
-        NdArrayView<ring2k_t> xb1(bshr1);
-        pforeach(0, xb0.numel(), [&](int64_t i) {
-          xb0[i] &= mask;
-          xb1[i] &= mask;
-        });
+        auto xb0 = NdArrayView<ring2k_t>(bshr0);
+        auto xb1 = NdArrayView<ring2k_t>(bshr1);
+        pforeach(0, xb0.numel(), [&](int64_t i) { xb0[i] &= mask; });
+        pforeach(0, xb1.numel(), [&](int64_t i) { xb1[i] &= mask; });
       }
     });
 
@@ -132,7 +125,7 @@ TEST_P(BasicOTProtTest, PackedB2A) {
     NdArrayRef ashr1;
     utils::simulate(kWorldSize, [&](std::shared_ptr<yacl::link::Context> ctx) {
       auto conn = std::make_shared<Communicator>(ctx);
-      BasicOTProtocols ot_prot(conn);
+      BasicOTProtocols ot_prot(conn, ferret_impl);
       if (ctx->Rank() == 0) {
         ashr0 = ot_prot.B2A(bshr0);
       } else {
@@ -143,10 +136,10 @@ TEST_P(BasicOTProtTest, PackedB2A) {
     EXPECT_EQ(ashr0.shape(), shape);
 
     DISPATCH_ALL_FIELDS(field, "", [&]() {
-      NdArrayView<ring2k_t> b0(bshr0);
-      NdArrayView<ring2k_t> b1(bshr1);
-      NdArrayView<ring2k_t> a0(ashr0);
-      NdArrayView<ring2k_t> a1(ashr1);
+      auto b0 = NdArrayView<ring2k_t>(bshr0);
+      auto b1 = NdArrayView<ring2k_t>(bshr1);
+      auto a0 = NdArrayView<ring2k_t>(ashr0);
+      auto a1 = NdArrayView<ring2k_t>(ashr1);
       auto mask = static_cast<ring2k_t>(-1);
 
       if (nbits > 0) {
@@ -165,7 +158,8 @@ TEST_P(BasicOTProtTest, PackedB2A) {
 TEST_P(BasicOTProtTest, PackedB2AFull) {
   size_t kWorldSize = 2;
   Shape shape = {1, 2, 3, 4, 5};
-  FieldType field = GetParam();
+  FieldType field = std::get<0>(GetParam());
+  BasicOTProtocols::FerretOTImpl ferret_impl = std::get<1>(GetParam());
 
   for (size_t nbits : {0}) {
     size_t packed_nbits = 8 * SizeOf(field) - nbits;
@@ -179,10 +173,8 @@ TEST_P(BasicOTProtTest, PackedB2AFull) {
         mask = (static_cast<ring2k_t>(1) << packed_nbits) - 1;
         auto xb0 = NdArrayView<ring2k_t>(bshr0);
         auto xb1 = NdArrayView<ring2k_t>(bshr1);
-        pforeach(0, xb0.numel(), [&](int64_t i) {
-          xb0[i] &= mask;
-          xb1[i] &= mask;
-        });
+        pforeach(0, xb0.numel(), [&](int64_t i) { xb0[i] &= mask; });
+        pforeach(0, xb1.numel(), [&](int64_t i) { xb1[i] &= mask; });
       }
     });
 
@@ -190,7 +182,7 @@ TEST_P(BasicOTProtTest, PackedB2AFull) {
     NdArrayRef ashr1;
     utils::simulate(kWorldSize, [&](std::shared_ptr<yacl::link::Context> ctx) {
       auto conn = std::make_shared<Communicator>(ctx);
-      BasicOTProtocols ot_prot(conn);
+      BasicOTProtocols ot_prot(conn, ferret_impl);
       if (ctx->Rank() == 0) {
         ashr0 = ot_prot.B2A(bshr0);
       } else {
@@ -202,10 +194,10 @@ TEST_P(BasicOTProtTest, PackedB2AFull) {
     EXPECT_EQ(ashr0.shape(), shape);
 
     DISPATCH_ALL_FIELDS(field, "", [&]() {
-      NdArrayView<ring2k_t> b0(bshr0);
-      NdArrayView<ring2k_t> b1(bshr1);
-      NdArrayView<ring2k_t> a0(ashr0);
-      NdArrayView<ring2k_t> a1(ashr1);
+      auto b0 = NdArrayView<ring2k_t>(bshr0);
+      auto b1 = NdArrayView<ring2k_t>(bshr1);
+      auto a0 = NdArrayView<ring2k_t>(ashr0);
+      auto a1 = NdArrayView<ring2k_t>(ashr1);
       auto mask = static_cast<ring2k_t>(-1);
       if (nbits > 0) {
         mask = (static_cast<ring2k_t>(1) << packed_nbits) - 1;
@@ -222,7 +214,8 @@ TEST_P(BasicOTProtTest, PackedB2AFull) {
 TEST_P(BasicOTProtTest, AndTripleSparse) {
   size_t kWorldSize = 2;
   Shape shape = {55, 100};
-  FieldType field = GetParam();
+  FieldType field = std::get<0>(GetParam());
+  BasicOTProtocols::FerretOTImpl ferret_impl = std::get<1>(GetParam());
   size_t max_bit = 8 * SizeOf(field);
 
   for (size_t sparse : {1UL, 7UL, max_bit - 1}) {
@@ -231,7 +224,7 @@ TEST_P(BasicOTProtTest, AndTripleSparse) {
 
     utils::simulate(kWorldSize, [&](std::shared_ptr<yacl::link::Context> ctx) {
       auto conn = std::make_shared<Communicator>(ctx);
-      BasicOTProtocols ot_prot(conn);
+      BasicOTProtocols ot_prot(conn, ferret_impl);
 
       for (const auto& t : ot_prot.AndTriple(field, shape, target_nbits)) {
         triple[ctx->Rank()].emplace_back(t);
@@ -240,12 +233,12 @@ TEST_P(BasicOTProtTest, AndTripleSparse) {
 
     DISPATCH_ALL_FIELDS(field, "", [&]() {
       ring2k_t max = static_cast<ring2k_t>(1) << target_nbits;
-      NdArrayView<ring2k_t> a0(triple[0][0]);
-      NdArrayView<ring2k_t> b0(triple[0][1]);
-      NdArrayView<ring2k_t> c0(triple[0][2]);
-      NdArrayView<ring2k_t> a1(triple[1][0]);
-      NdArrayView<ring2k_t> b1(triple[1][1]);
-      NdArrayView<ring2k_t> c1(triple[1][2]);
+      auto a0 = NdArrayView<ring2k_t>(triple[0][0]);
+      auto b0 = NdArrayView<ring2k_t>(triple[0][1]);
+      auto c0 = NdArrayView<ring2k_t>(triple[0][2]);
+      auto a1 = NdArrayView<ring2k_t>(triple[1][0]);
+      auto b1 = NdArrayView<ring2k_t>(triple[1][1]);
+      auto c1 = NdArrayView<ring2k_t>(triple[1][2]);
 
       for (int64_t i = 0; i < shape.numel(); ++i) {
         EXPECT_TRUE(a0[i] < max && a1[i] < max);
@@ -260,72 +253,29 @@ TEST_P(BasicOTProtTest, AndTripleSparse) {
   }
 }
 
-TEST_P(BasicOTProtTest, BitwiseAnd) {
-  size_t kWorldSize = 2;
-  Shape shape = {55};
-  FieldType field = GetParam();
-  int bw = SizeOf(field) * 8;
-  auto boolean_t = makeType<BShrTy>(field, bw);
-
-  NdArrayRef lhs[2];
-  NdArrayRef rhs[2];
-  NdArrayRef out[2];
-
-  for (int i : {0, 1}) {
-    lhs[i] = ring_rand(field, shape).as(boolean_t);
-    rhs[i] = ring_rand(field, shape).as(boolean_t);
-    DISPATCH_ALL_FIELDS(field, "mask", [&]() {
-      ring2k_t mask = makeBitsMask<ring2k_t>(bw);
-      NdArrayView<ring2k_t> L(lhs[i]);
-      NdArrayView<ring2k_t> R(rhs[i]);
-
-      pforeach(0, shape.numel(), [&](int64_t j) { L[j] &= mask; });
-      pforeach(0, shape.numel(), [&](int64_t j) { R[j] &= mask; });
-    });
-  }
-
-  utils::simulate(kWorldSize, [&](std::shared_ptr<yacl::link::Context> ctx) {
-    auto conn = std::make_shared<Communicator>(ctx);
-    BasicOTProtocols ot_prot(conn);
-    int r = ctx->Rank();
-    out[r] = ot_prot.BitwiseAnd(lhs[r].clone(), rhs[r].clone());
-  });
-
-  auto expected = ring_and(ring_xor(lhs[0], lhs[1]), ring_xor(rhs[0], rhs[1]));
-  auto got = ring_xor(out[0], out[1]);
-
-  DISPATCH_ALL_FIELDS(field, "", [&]() {
-    NdArrayView<ring2k_t> e(expected);
-    NdArrayView<ring2k_t> g(got);
-
-    for (int64_t i = 0; i < shape.numel(); ++i) {
-      ASSERT_EQ(e[i], g[i]);
-    }
-  });
-}
-
 TEST_P(BasicOTProtTest, AndTripleFull) {
   size_t kWorldSize = 2;
   Shape shape = {55, 11};
-  FieldType field = GetParam();
+  FieldType field = std::get<0>(GetParam());
+  BasicOTProtocols::FerretOTImpl ferret_impl = std::get<1>(GetParam());
 
   std::vector<NdArrayRef> packed_triple[2];
 
   utils::simulate(kWorldSize, [&](std::shared_ptr<yacl::link::Context> ctx) {
     auto conn = std::make_shared<Communicator>(ctx);
-    BasicOTProtocols ot_prot(conn);
+    BasicOTProtocols ot_prot(conn, ferret_impl);
     for (const auto& t : ot_prot.AndTriple(field, shape, SizeOf(field) * 8)) {
       packed_triple[ctx->Rank()].emplace_back(t);
     }
   });
 
   DISPATCH_ALL_FIELDS(field, "", [&]() {
-    NdArrayView<ring2k_t> a0(packed_triple[0][0]);
-    NdArrayView<ring2k_t> b0(packed_triple[0][1]);
-    NdArrayView<ring2k_t> c0(packed_triple[0][2]);
-    NdArrayView<ring2k_t> a1(packed_triple[1][0]);
-    NdArrayView<ring2k_t> b1(packed_triple[1][1]);
-    NdArrayView<ring2k_t> c1(packed_triple[1][2]);
+    auto a0 = NdArrayView<ring2k_t>(packed_triple[0][0]);
+    auto b0 = NdArrayView<ring2k_t>(packed_triple[0][1]);
+    auto c0 = NdArrayView<ring2k_t>(packed_triple[0][2]);
+    auto a1 = NdArrayView<ring2k_t>(packed_triple[1][0]);
+    auto b1 = NdArrayView<ring2k_t>(packed_triple[1][1]);
+    auto c1 = NdArrayView<ring2k_t>(packed_triple[1][2]);
 
     size_t nn = a0.numel();
     EXPECT_TRUE(nn * 8 * SizeOf(field) >= (size_t)shape.numel());
@@ -342,7 +292,8 @@ TEST_P(BasicOTProtTest, AndTripleFull) {
 TEST_P(BasicOTProtTest, Multiplexer) {
   size_t kWorldSize = 2;
   Shape shape = {3, 4, 1, 3};
-  FieldType field = GetParam();
+  FieldType field = std::get<0>(GetParam());
+  BasicOTProtocols::FerretOTImpl ferret_impl = std::get<1>(GetParam());
 
   auto boolean_t = makeType<BShrTy>(field, 1);
 
@@ -353,18 +304,17 @@ TEST_P(BasicOTProtTest, Multiplexer) {
 
   DISPATCH_ALL_FIELDS(field, "", [&]() {
     auto mask = static_cast<ring2k_t>(1);
-    NdArrayView<ring2k_t> xb0(bshr0);
-    NdArrayView<ring2k_t> xb1(bshr1);
-    pforeach(0, xb0.numel(), [&](int64_t i) {
-      xb0[i] &= mask;
-      xb1[i] &= mask;
-    });
+    auto xb0 = NdArrayView<ring2k_t>(bshr0);
+    auto xb1 = NdArrayView<ring2k_t>(bshr1);
+
+    pforeach(0, xb0.numel(), [&](int64_t i) { xb0[i] &= mask; });
+    pforeach(0, xb1.numel(), [&](int64_t i) { xb1[i] &= mask; });
   });
 
   NdArrayRef computed[2];
   utils::simulate(kWorldSize, [&](std::shared_ptr<yacl::link::Context> ctx) {
     auto conn = std::make_shared<Communicator>(ctx);
-    BasicOTProtocols ot_prot(conn);
+    BasicOTProtocols ot_prot(conn, ferret_impl);
     if (ctx->Rank() == 0) {
       computed[0] = ot_prot.Multiplexer(ashr0, bshr0);
     } else {
@@ -376,12 +326,12 @@ TEST_P(BasicOTProtTest, Multiplexer) {
   EXPECT_EQ(computed[0].shape(), shape);
 
   DISPATCH_ALL_FIELDS(field, "", [&]() {
-    NdArrayView<ring2k_t> a0(ashr0);
-    NdArrayView<ring2k_t> a1(ashr1);
-    NdArrayView<ring2k_t> b0(bshr0);
-    NdArrayView<ring2k_t> b1(bshr1);
-    NdArrayView<ring2k_t> c0(computed[0]);
-    NdArrayView<ring2k_t> c1(computed[1]);
+    auto a0 = NdArrayView<ring2k_t>(ashr0);
+    auto a1 = NdArrayView<ring2k_t>(ashr1);
+    auto b0 = NdArrayView<ring2k_t>(bshr0);
+    auto b1 = NdArrayView<ring2k_t>(bshr1);
+    auto c0 = NdArrayView<ring2k_t>(computed[0]);
+    auto c1 = NdArrayView<ring2k_t>(computed[1]);
 
     for (int64_t i = 0; i < shape.numel(); ++i) {
       ring2k_t msg = (a0[i] + a1[i]);
@@ -393,16 +343,66 @@ TEST_P(BasicOTProtTest, Multiplexer) {
   });
 }
 
+TEST_P(BasicOTProtTest, MultiplexerOnPrivate) {
+  size_t kWorldSize = 2;
+  Shape shape = {100};
+  FieldType field = std::get<0>(GetParam());
+  BasicOTProtocols::FerretOTImpl ferret_impl = std::get<1>(GetParam());
+
+  auto boolean_t = makeType<BShrTy>(field, 1);
+
+  auto ashr0 = ring_rand(field, shape);
+  auto ashr1 = ring_rand(field, shape);
+  auto bshr = ring_rand(field, shape).as(boolean_t);
+
+  DISPATCH_ALL_FIELDS(field, "init", [&]() {
+    auto mask = static_cast<ring2k_t>(1);
+    auto xb0 = NdArrayView<ring2k_t>(bshr);
+    pforeach(0, xb0.numel(), [&](int64_t i) { xb0[i] &= mask; });
+  });
+
+  NdArrayRef computed[2];
+  utils::simulate(kWorldSize, [&](std::shared_ptr<yacl::link::Context> ctx) {
+    auto conn = std::make_shared<Communicator>(ctx);
+    BasicOTProtocols ot_prot(conn, ferret_impl);
+    if (ctx->Rank() == 0) {
+      computed[0] = ot_prot.MultiplexerOnPrivate(ashr0, bshr);
+    } else {
+      computed[1] = ot_prot.MultiplexerOnPrivate(ashr1);
+    }
+  });
+
+  EXPECT_EQ(computed[0].shape(), computed[1].shape());
+  EXPECT_EQ(computed[0].shape(), shape);
+
+  DISPATCH_ALL_FIELDS(field, "checkt", [&]() {
+    auto a0 = NdArrayView<ring2k_t>(ashr0);
+    auto a1 = NdArrayView<ring2k_t>(ashr1);
+    auto b = NdArrayView<ring2k_t>(bshr);
+    auto c0 = NdArrayView<ring2k_t>(computed[0]);
+    auto c1 = NdArrayView<ring2k_t>(computed[1]);
+
+    for (int64_t i = 0; i < shape.numel(); ++i) {
+      ring2k_t msg = (a0[i] + a1[i]);
+      ring2k_t sel = b[i];
+      ring2k_t exp = msg * sel;
+      ring2k_t got = (c0[i] + c1[i]);
+      EXPECT_EQ(exp, got);
+    }
+  });
+}
+
 TEST_P(BasicOTProtTest, CorrelatedAndTriple) {
   size_t kWorldSize = 2;
   Shape shape = {10 * 8};
-  FieldType field = GetParam();
+  FieldType field = std::get<0>(GetParam());
+  BasicOTProtocols::FerretOTImpl ferret_impl = std::get<1>(GetParam());
 
   std::array<NdArrayRef, 5> corr_triple[2];
 
   utils::simulate(kWorldSize, [&](std::shared_ptr<yacl::link::Context> ctx) {
     auto conn = std::make_shared<Communicator>(ctx);
-    BasicOTProtocols ot_prot(conn);
+    BasicOTProtocols ot_prot(conn, ferret_impl);
     corr_triple[ctx->Rank()] = ot_prot.CorrelatedAndTriple(field, shape);
   });
 

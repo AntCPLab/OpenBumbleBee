@@ -29,6 +29,8 @@ namespace spu::mpc::cheetah {
 //  https://eprint.iacr.org/2022/207.pdf
 class CheetahDot {
  public:
+  enum class Role { encryptor, evaluator, dynamic };
+
   explicit CheetahDot(const std::shared_ptr<yacl::link::Context>& lctx,
                       bool enable_matmul_pack = true);
 
@@ -40,19 +42,15 @@ class CheetahDot {
 
   CheetahDot(CheetahDot&&) = delete;
 
-  void LazyInitKeys(FieldType field);
-
-  // make sure to call InitKeys first
   NdArrayRef DotOLE(const NdArrayRef& inp, const Shape3D& dim3,
-                    bool is_self_lhs);
+                    bool is_self_lhs, Role role = Role::dynamic);
 
   // LHS.shape MxK, RHS.shape KxL => MxL
-  // make sure to call InitKeys first
   NdArrayRef DotOLE(const NdArrayRef& inp, yacl::link::Context* conn,
-                    const Shape3D& dim3, bool is_self_lhs);
+                    const Shape3D& dim3, bool is_self_lhs,
+                    Role role = Role::dynamic);
 
   // LHS.shape BxMxK, RHS.shape BxKxL => BxMxL
-  // make sure to call InitKeys first
   NdArrayRef BatchDotOLE(const NdArrayRef& inp, yacl::link::Context* conn,
                          const Shape4D& dim4, bool is_self_lhs);
 

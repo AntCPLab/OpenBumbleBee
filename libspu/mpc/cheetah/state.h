@@ -38,6 +38,10 @@ class CheetahMulState : public State {
   mutable int64_t cached_sze_{0};
   FieldType field_{FT_INVALID};
   NdArrayRef cached_beaver_[3];
+  NdArrayRef cached_square_[2];
+
+  std::unordered_map<FieldType, std::array<NdArrayRef, 3>> beaver_cache_;
+  std::unordered_map<FieldType, std::array<NdArrayRef, 2>> square_cache_;
 
   std::unique_ptr<CheetahMul> mul_prot_;
   std::shared_ptr<yacl::link::Context> duplx_;
@@ -64,6 +68,8 @@ class CheetahMulState : public State {
   std::shared_ptr<yacl::link::Context> duplx() { return duplx_; }
 
   std::array<NdArrayRef, 3> TakeCachedBeaver(FieldType field, int64_t num);
+
+  std::array<NdArrayRef, 2> TakeCachedSquare(FieldType field, int64_t num);
 };
 
 class CheetahDotState : public State {
@@ -91,18 +97,21 @@ class CheetahOTState : public State {
   using ProtPtr = std::shared_ptr<BasicOTProtocols>;
 
   mutable std::mutex lock_;
+  size_t instance_allocated_ = 0;
   std::vector<ProtPtr> basic_ot_prot_;
 
  public:
   static constexpr char kBindName[] = "CheetahOT";
-  static constexpr size_t kMaxOTParallel = 32;
+  static constexpr size_t kMaxNumOtInstances = 24;
 
-  explicit CheetahOTState() : basic_ot_prot_(kMaxOTParallel) {}
+  explicit CheetahOTState() : basic_ot_prot_(kMaxNumOtInstances) {}
 
-  ~CheetahOTState() override = default;
+  ~CheetahOTState() override {
+    SPDLOG_INFO("CHEETAH allocated {} OT instances", instance_allocated_);
+  }
 
   void LazyInit(Communicator* comm, size_t idx = 0) {
-    SPU_ENFORCE(idx < kMaxOTParallel, "idx={} out-of-bound", idx);
+    SPU_ENFORCE(idx < kMaxNumOtInstances, "idx={} out-of-bound", idx);
     std::lock_guard guard(lock_);
     if (basic_ot_prot_[idx]) {
       return;
@@ -114,10 +123,11 @@ class CheetahOTState : public State {
     link->SetThrottleWindowSize(0);
     auto _comm = std::make_shared<Communicator>(std::move(link));
     basic_ot_prot_[idx] = std::make_shared<BasicOTProtocols>(std::move(_comm));
+    instance_allocated_ += 1;
   }
 
   std::shared_ptr<BasicOTProtocols> get(size_t idx = 0) {
-    SPU_ENFORCE(idx < kMaxOTParallel, "idx={} out-of-bound", idx);
+    SPU_ENFORCE(idx < kMaxNumOtInstances, "idx={} out-of-bound", idx);
     SPU_ENFORCE(basic_ot_prot_[idx], "call LazyInit first");
     return basic_ot_prot_[idx];
   }
