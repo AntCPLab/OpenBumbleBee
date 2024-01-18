@@ -66,6 +66,7 @@ void regBumblebeeProtocol(SPUContext* ctx,
           bumblebee::MulAP, bumblebee::MulAA, bumblebee::MulA1B,           //
           bumblebee::EqualAA, bumblebee::EqualAP,                          //
           bumblebee::MatMulAP, bumblebee::MatMulAA, bumblebee::MatMulAV,   //
+          bumblebee::BatchMatMulAA, bumblebee::BatchMatMulAV,              //
           bumblebee::LShiftA, bumblebee::ARShiftB, bumblebee::LShiftB,
           bumblebee::RShiftB,                                        //
           bumblebee::BitrevB,                                        //
