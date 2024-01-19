@@ -15,40 +15,49 @@
 #include "libspu/mpc/bumblebee/ot/basic_ot_prot.h"
 
 #include "libspu/mpc/bumblebee/env.h"
-#include "libspu/mpc/bumblebee/ot/emp_ferret/emp_ferret.h"
+#include "libspu/mpc/bumblebee/ot/emp/emp_ferret.h"
 #include "libspu/mpc/bumblebee/ot/util.h"
-#include "libspu/mpc/bumblebee/ot/yacl_ferret/yacl_ferret.h"
+#include "libspu/mpc/bumblebee/ot/yacl/yacl_ferret.h"
 #include "libspu/mpc/bumblebee/type.h"
 #include "libspu/mpc/common/communicator.h"
 #include "libspu/mpc/utils/ring_ops.h"
 
 namespace spu::mpc::bumblebee {
 
-BasicOTProtocols::BasicOTProtocols(std::shared_ptr<Communicator> conn,
-                                   FerretOTImpl impl)
+BasicOTProtocols::BasicOTProtocols(std::shared_ptr<Communicator> conn)
     : conn_(std::move(conn)) {
   SPU_ENFORCE(conn_ != nullptr);
-  if (impl == FerretOTImpl::default_impl) {
-    auto use_emp = TestEnvFlag(EnvFlag::SPU_BB_ENABLE_EMP_FERRET);
-    impl = use_emp ? FerretOTImpl::emp : FerretOTImpl::yacl;
-  }
 
-  if (impl == FerretOTImpl::emp) {
+  int ot_type = TestEnvInt(EnvFlag::SPU_BB_SET_OT_TYPE);
+  if (ot_type == 0 || ot_type == 1) {
+    // YaclFerretOt
     if (conn_->getRank() == 0) {
-      ferret_sender_ = std::make_shared<EmpFerretOT>(conn_, true);
-      ferret_receiver_ = std::make_shared<EmpFerretOT>(conn_, false);
+      ferret_sender_ = std::make_shared<YaclFerretOt>(conn_, true);
+      ferret_receiver_ = std::make_shared<YaclFerretOt>(conn_, false);
     } else {
-      ferret_receiver_ = std::make_shared<EmpFerretOT>(conn_, false);
-      ferret_sender_ = std::make_shared<EmpFerretOT>(conn_, true);
+      ferret_receiver_ = std::make_shared<YaclFerretOt>(conn_, false);
+      ferret_sender_ = std::make_shared<YaclFerretOt>(conn_, true);
     }
-  } else if (impl == FerretOTImpl::yacl) {
+  } else if (ot_type == 2) {
+    // EmpFerretOt
     if (conn_->getRank() == 0) {
-      ferret_sender_ = std::make_shared<YaclFerretOT>(conn_, true);
-      ferret_receiver_ = std::make_shared<YaclFerretOT>(conn_, false);
+      ferret_sender_ = std::make_shared<EmpFerretOt>(conn_, true);
+      ferret_receiver_ = std::make_shared<EmpFerretOt>(conn_, false);
     } else {
-      ferret_receiver_ = std::make_shared<YaclFerretOT>(conn_, false);
-      ferret_sender_ = std::make_shared<YaclFerretOT>(conn_, true);
+      ferret_receiver_ = std::make_shared<EmpFerretOt>(conn_, false);
+      ferret_sender_ = std::make_shared<EmpFerretOt>(conn_, true);
     }
+  } else if (ot_type == 3) {
+    // YaclSpokenSoftOt
+    if (conn_->getRank() == 0) {
+      ferret_sender_ = std::make_shared<YaclSpokenSoftOt>(conn_, true);
+      ferret_receiver_ = std::make_shared<YaclSpokenSoftOt>(conn_, false);
+    } else {
+      ferret_receiver_ = std::make_shared<YaclSpokenSoftOt>(conn_, false);
+      ferret_sender_ = std::make_shared<YaclSpokenSoftOt>(conn_, true);
+    }
+  } else {
+    SPU_THROW("unknown OtType = {}", ot_type);
   }
 }
 

@@ -12,33 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#pragma once
+#include "libspu/mpc/bumblebee/ot/util.h"
+
+#include <numeric>
+
+#include "libspu/core/prelude.h"
 
 namespace spu::mpc::bumblebee {
 
-enum class EnvFlag {
-  // enable approximately less than between a share and a plaintext
-  SPU_BB_ENABLE_APPROX_LESS_THAN,
+uint8_t BoolToU8(absl::Span<const uint8_t> bits) {
+  size_t len = bits.size();
+  SPU_ENFORCE(len >= 1 && len <= 8);
+  return std::accumulate(
+      bits.data(), bits.data() + len,
+      /*init*/ static_cast<uint8_t>(0),
+      [](uint8_t init, uint8_t next) { return (init << 1) | (next & 1); });
+}
 
-  // enable 1bit error in Mul
-  SPU_BB_ENABLE_MUL_ERROR,
-
-  // enable ciphertext packing
-  SPU_BB_ENABLE_MMUL_PACK,
-
-  // 0 = default (yacl_ferret)
-  // 1 = yacl_ferret
-  // 2 = emp_ferret
-  // 3 = yacl_spokensoft
-  SPU_BB_SET_OT_TYPE,
-
-  // set the max bits for i_equal
-  SPU_BB_SET_IEQUAL_BITS,
-};
-
-bool TestEnvFlag(EnvFlag e);
-
-// If not exist return 0
-int TestEnvInt(EnvFlag e);
+void U8ToBool(absl::Span<uint8_t> bits, uint8_t u8) {
+  size_t len = std::min(8UL, bits.size());
+  SPU_ENFORCE(len >= 1);
+  for (size_t i = 0; i < len; ++i) {
+    bits[i] = (u8 & 1);
+    u8 >>= 1;
+  }
+}
 
 }  // namespace spu::mpc::bumblebee

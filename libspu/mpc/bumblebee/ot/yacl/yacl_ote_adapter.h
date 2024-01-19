@@ -19,21 +19,22 @@
 #include "yacl/crypto/primitives/ot/ferret_ote.h"
 #include "yacl/crypto/primitives/ot/iknp_ote.h"
 #include "yacl/crypto/primitives/ot/ot_store.h"
+#include "yacl/crypto/primitives/ot/softspoken_ote.h"
 #include "yacl/crypto/utils/rand.h"
 
 #include "libspu/core/prelude.h"
 #include "libspu/mpc/bumblebee/ot/util.h"
-#include "libspu/mpc/bumblebee/ot/yacl_ferret/yacl_util.h"
+#include "libspu/mpc/bumblebee/ot/yacl/yacl_util.h"
 
 namespace spu::mpc::bumblebee {
 
 namespace yc = yacl::crypto;
 namespace yl = yacl::link;
 
-class YaclOTeAdaptor {
+class YaclOTeAdapter {
  public:
-  YaclOTeAdaptor() = default;
-  virtual ~YaclOTeAdaptor() = default;
+  YaclOTeAdapter() = default;
+  virtual ~YaclOTeAdapter() = default;
   virtual void send_rcot(absl::Span<uint128_t> data) = 0;
   virtual void recv_rcot(absl::Span<uint128_t> data,
                          absl::Span<uint8_t> choices) = 0;
@@ -46,22 +47,23 @@ class YaclOTeAdaptor {
   virtual uint128_t GetDelta() const { return Delta; }
 };
 
-class YaclFerretOTeAdaptor : public YaclOTeAdaptor {
+class YaclFerretOTeAdapter : public YaclOTeAdapter {
  public:
-  YaclFerretOTeAdaptor(const std::shared_ptr<yl::Context> ctx, bool is_sender) {
-    ctx_ = ctx->Spawn();  // Spawn link
+  YaclFerretOTeAdapter(const std::shared_ptr<yl::Context>& ctx,
+                       bool is_sender) {
+    ctx_ = ctx;
     is_sender_ = is_sender;
     reserve_num_ = yc::FerretCotHelper(lpn_param_, 0);
 
-    ot_buff_.resize(lpn_param_.n);
+    ot_buff_ = yacl::Buffer(lpn_param_.n * sizeof(uint128_t));
 
     id_ = yacl_id_;
     ++yacl_id_;
   }
 
-  ~YaclFerretOTeAdaptor() {
+  ~YaclFerretOTeAdapter() {
     SPDLOG_DEBUG(
-        "[FerretAdaptor {}]({}), comsume OT {}, total time {:.3e} ms, "
+        "[FerretAdapter {}]({}), comsume OT {}, total time {:.3e} ms, "
         "invoke bootstrap {} ( {:.2e} ms per bootstrap, {:.2e} ms per ot )",
         id_, (is_sender_ ? fmt::format("Sender") : fmt::format("Receiver")),
         consumed_ot_num_, bootstrap_time_, bootstrap_num_,
@@ -121,11 +123,15 @@ class YaclFerretOTeAdaptor : public YaclOTeAdaptor {
 
   uint64_t buff_upper_bound_{0};
 
-  yacl::AlignedVector<uint128_t> ot_buff_;  // ot buffer
+  // We choose `yacl::Buffer` instead of `yacl::AlignedVector`. Because
+  // `yacl::AlignedVector` or `std::vector` would fill the
+  // vector with initializing data. When `size` is a big number, it would
+  // take lots of time to set the memory (ten millison for thiry milliseconds).
+  // Thus, we use `yacl::Buffer` to avoid meaningless initialization.
+  yacl::Buffer ot_buff_;  // ot buffer
 
   // Yacl Ferret OTe
   void Bootstrap();
-
   // Yacl Ferret OTe
   void BootstrapInplace(absl::Span<uint128_t> ot, absl::Span<uint128_t> data);
 
@@ -137,18 +143,18 @@ class YaclFerretOTeAdaptor : public YaclOTeAdaptor {
   static uint128_t yacl_id_;
 };
 
-class YaclIknpOTeAdaptor : public YaclOTeAdaptor {
+class YaclIknpOTeAdapter : public YaclOTeAdapter {
  public:
-  YaclIknpOTeAdaptor(const std::shared_ptr<yl::Context> ctx, bool is_sender) {
-    ctx_ = ctx->Spawn();  // Spawn link
+  YaclIknpOTeAdapter(const std::shared_ptr<yl::Context>& ctx, bool is_sender) {
+    ctx_ = ctx;
     is_sender_ = is_sender;
     id_ = yacl_id_;
     ++yacl_id_;
   }
 
-  ~YaclIknpOTeAdaptor() {
+  ~YaclIknpOTeAdapter() {
     SPDLOG_DEBUG(
-        "[IknpAdaptor {}]({}), comsume OT {}, total time {:.3e} ms,"
+        "[IknpAdapter {}]({}), comsume OT {}, total time {:.3e} ms,"
         "invoke IKNP-OTe {} ( {:.2e} ms per iknp , {:.2e} ms per ot )",
         id_, (is_sender_ ? fmt::format("Sender") : fmt::format("Receiver")),
         consumed_ot_num_, ote_time_, ote_num_, ote_time_ / ote_num_,
@@ -175,38 +181,10 @@ class YaclIknpOTeAdaptor : public YaclOTeAdaptor {
 
   // IKNP ENTRY
   // Correlated Cot with Chosen Choices
-  void send_cot(absl::Span<uint128_t> data) override {
-    SPU_ENFORCE(is_sender_);
-    auto begin = std::chrono::high_resolution_clock::now();
-
-    // [Warning] copy, low efficiency
-    std::vector<std::array<uint128_t, 2>> send_blocks(data.size());
-    yc::IknpOtExtSend(ctx_, *recv_ot_ptr_, absl::MakeSpan(send_blocks), true);
-    for (uint64_t i = 0; i < data.size(); ++i) {
-      data[i] = send_blocks[i][0];
-    }
-    auto end = std::chrono::high_resolution_clock::now();
-    auto elapse =
-        std::chrono::duration_cast<std::chrono::duration<double>>(end - begin)
-            .count();
-    ote_time_ += elapse * 1000;
-    consumed_ot_num_ += data.size();
-    ++ote_num_;
-  }
+  void send_cot(absl::Span<uint128_t> data) override;
 
   void recv_cot(absl::Span<uint128_t> data,
-                const yacl::dynamic_bitset<uint128_t>& choices) {
-    SPU_ENFORCE(is_sender_ == false);
-    auto begin = std::chrono::high_resolution_clock::now();
-    yc::IknpOtExtRecv(ctx_, *send_ot_ptr_, choices, absl::MakeSpan(data), true);
-    auto end = std::chrono::high_resolution_clock::now();
-    auto elapse =
-        std::chrono::duration_cast<std::chrono::duration<double>>(end - begin)
-            .count();
-    ote_time_ += elapse * 1000;
-    consumed_ot_num_ += data.size();
-    ++ote_num_;
-  }
+                const yacl::dynamic_bitset<uint128_t>& choices);
 
   uint128_t GetDelta() const override { return Delta; }
 
@@ -233,4 +211,86 @@ class YaclIknpOTeAdaptor : public YaclOTeAdaptor {
   static uint128_t yacl_id_;
 };
 
+class YaclSsOTeAdapter : public YaclOTeAdapter {
+ public:
+  // LocalHost or 10000Mbps, set k = 2
+  // 1000Mbps, set k = 4
+  // 500Mbps, set k = 5
+  // 200Mbps, set k = 7
+  // 100Mbps or lower, set k = 8
+  YaclSsOTeAdapter(const std::shared_ptr<yl::Context>& ctx, bool is_sender,
+                   uint64_t k = 2) {
+    ctx_ = ctx;
+    is_sender_ = is_sender;
+
+    if (is_sender_) {
+      ss_sender_ = std::make_unique<yc::SoftspokenOtExtSender>(k);
+    } else {
+      ss_receiver_ = std::make_unique<yc::SoftspokenOtExtReceiver>(k);
+    }
+
+    id_ = yacl_id_;
+    ++yacl_id_;
+  }
+
+  ~YaclSsOTeAdapter() {
+    SPDLOG_DEBUG(
+        "[Destructor] SoftspokenAdapter work as {}, total comsume OT {}, "
+        "invoke softspoken {}, softspoken time {} ms, {} ms per softspoken , "
+        "{} ms per ot ",
+        (is_sender_ ? fmt::format("Sender") : fmt::format("Receiver")),
+        consumed_ot_num_, ote_num_, ote_time_, ote_time_ / ote_num_,
+        ote_time_ / consumed_ot_num_);
+  }
+
+  void OneTimeSetup() override;
+
+  void recv_cot(absl::Span<uint128_t> data,
+                absl::Span<const uint8_t> choices) override {
+    recv_cot(data, VecU8toBitset(choices));
+  }
+
+  inline void send_rcot(absl::Span<uint128_t> data) override { send_cot(data); }
+
+  inline void recv_rcot(absl::Span<uint128_t> data,
+                        absl::Span<uint8_t> choices) override {
+    auto _choices =
+        yc::RandBits<yacl::dynamic_bitset<uint128_t>>(data.size(), true);
+    BitsettoVecU8(_choices, choices);
+
+    recv_cot(data, _choices);
+  }
+
+  // Softspoken ENTRY
+  // Correlated Cot with Chosen Choices
+  void send_cot(absl::Span<uint128_t> data) override;
+
+  void recv_cot(absl::Span<uint128_t> data,
+                const yacl::dynamic_bitset<uint128_t>& choices);
+
+  uint128_t GetDelta() const override { return Delta; }
+
+  uint128_t GetConsumed() const { return consumed_ot_num_; }
+
+  double GetTime() const { return ote_time_; }
+
+ private:
+  std::shared_ptr<yl::Context> ctx_{nullptr};
+
+  std::unique_ptr<yc::SoftspokenOtExtSender> ss_sender_{nullptr};
+
+  std::unique_ptr<yc::SoftspokenOtExtReceiver> ss_receiver_{nullptr};
+
+  bool is_sender_{false};
+
+  bool is_setup_{false};
+
+  // Just for test
+  uint128_t consumed_ot_num_{0};
+  uint128_t ote_num_{0};  // number of invoke ote protocol
+  double ote_time_{0.0};  // ms
+  // Debug only
+  uint128_t id_{0};
+  static uint128_t yacl_id_;
+};
 }  // namespace spu::mpc::bumblebee

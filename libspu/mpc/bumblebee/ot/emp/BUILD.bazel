@@ -1,4 +1,4 @@
-# Copyright 2021 Ant Group Co., Ltd.
+# Copyright 2022 Ant Group Co., Ltd.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,8 +21,8 @@ spu_cc_library(
     name = "emp_ferret",
     srcs = ["emp_ferret.cc"],
     hdrs = [
-        "emp_ferret.h",
         "emp_util.h",
+        "emp_ferret.h",
         "mitccrh_exp.h",
     ],
     copts = AES_COPT_FLAGS + ["-Wno-ignored-attributes"],
@@ -40,6 +40,7 @@ spu_cc_library(
 
 spu_cc_test(
     name = "emp_ferret_test",
+    timeout = "eternal",
     srcs = ["emp_ferret_test.cc"],
     deps = [
         ":emp_ferret",

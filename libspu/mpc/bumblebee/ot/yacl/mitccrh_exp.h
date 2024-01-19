@@ -21,8 +21,7 @@
 
 #include "yacl/crypto/base/aes/aes_opt.h"
 
-#include "libspu/mpc/bumblebee/ot/util.h"
-#include "libspu/mpc/bumblebee/ot/yacl_ferret/yacl_util.h"
+#include "libspu/mpc/bumblebee/ot/yacl/yacl_util.h"
 
 namespace spu::mpc::bumblebee {
 

@@ -14,8 +14,11 @@
 
 #pragma once
 
+#include "absl/types/span.h"
 #include "emp-tool/utils/block.h"
 #include "yacl/base/int128.h"
+
+#include "libspu/core/prelude.h"
 
 namespace spu::mpc::bumblebee {
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "libspu/mpc/bumblebee/ot/emp_ferret/emp_ferret.h"
+#include "libspu/mpc/bumblebee/ot/emp/emp_ferret.h"
 
 #include <utility>
 
@@ -23,8 +23,8 @@
 #include "yacl/base/buffer.h"
 #include "yacl/link/link.h"
 
-#include "libspu/mpc/bumblebee/ot/emp_ferret/emp_util.h"
-#include "libspu/mpc/bumblebee/ot/emp_ferret/mitccrh_exp.h"
+#include "libspu/mpc/bumblebee/ot/emp/emp_util.h"
+#include "libspu/mpc/bumblebee/ot/emp/mitccrh_exp.h"
 #include "libspu/mpc/bumblebee/ot/util.h"
 
 #define PRE_OT_DATA_REG_SEND_FILE_ALICE "pre_ferret_data_reg_send_alice"
@@ -38,7 +38,7 @@ using OtBaseTyp = emp::block;
 
 // A concrete class for emp::IOChannel
 // Because emp::FerretCOT needs a uniform API of emp::IOChannel
-class BumblebeeIO : public emp::IOChannel<BumblebeeIO> {
+class CheetahIO : public emp::IOChannel<CheetahIO> {
  public:
   std::shared_ptr<Communicator> conn_;
 
@@ -53,7 +53,7 @@ class BumblebeeIO : public emp::IOChannel<BumblebeeIO> {
   std::vector<uint8_t> recv_buffer_;
   uint64_t recv_buffer_used_;
 
-  explicit BumblebeeIO(std::shared_ptr<Communicator> conn)
+  explicit CheetahIO(std::shared_ptr<Communicator> conn)
       : conn_(std::move(conn)),
         send_op_(0),
         recv_op_(0),
@@ -62,7 +62,7 @@ class BumblebeeIO : public emp::IOChannel<BumblebeeIO> {
     send_buffer_.resize(SEND_BUFFER_SIZE);
   }
 
-  ~BumblebeeIO() {
+  ~CheetahIO() {
     try {
       flush();
     } catch (const std::exception& e) {
@@ -78,7 +78,7 @@ class BumblebeeIO : public emp::IOChannel<BumblebeeIO> {
     conn_->sendAsync(
         conn_->nextRank(),
         absl::Span<const uint8_t>{send_buffer_.data(), send_buffer_used_},
-        fmt::format("BumblebeeIO send:{}", send_op_++));
+        fmt::format("CheetahIO send:{}", send_op_++));
 
     std::memset(send_buffer_.data(), 0, SEND_BUFFER_SIZE);
     send_buffer_used_ = 0;
@@ -86,7 +86,7 @@ class BumblebeeIO : public emp::IOChannel<BumblebeeIO> {
 
   void fill_recv() {
     recv_buffer_ = conn_->recv<uint8_t>(
-        conn_->nextRank(), fmt::format("BumblebeeIO recv:{}", recv_op_++));
+        conn_->nextRank(), fmt::format("CheetahIO recv:{}", recv_op_++));
     recv_buffer_used_ = 0;
   }
 
@@ -167,13 +167,13 @@ class BumblebeeIO : public emp::IOChannel<BumblebeeIO> {
   }
 };
 
-struct EmpFerretOT::Impl {
+struct EmpFerretOt::Impl {
  private:
   const bool is_sender_;
 
-  std::shared_ptr<BumblebeeIO> io_{nullptr};
-  std::array<BumblebeeIO*, 1> io_holder_;
-  std::shared_ptr<emp::FerretCOT<BumblebeeIO>> ferret_{nullptr};
+  std::shared_ptr<CheetahIO> io_{nullptr};
+  std::array<CheetahIO*, 1> io_holder_;
+  std::shared_ptr<emp::FerretCOT<CheetahIO>> ferret_{nullptr};
 
   MITCCRHExp<8> mitccrh_exp_{};
 
@@ -201,7 +201,7 @@ struct EmpFerretOT::Impl {
     constexpr int thread = 1;
     constexpr bool run_setup = true;
     int role = is_sender ? emp::ALICE : emp::BOB;
-    io_ = std::make_shared<BumblebeeIO>(conn);
+    io_ = std::make_shared<CheetahIO>(conn);
     io_holder_[0] = io_.get();
     std::string save_file;
     if (conn->getRank() == 0) {
@@ -218,7 +218,7 @@ struct EmpFerretOT::Impl {
       }
     }
 
-    ferret_ = std::make_shared<emp::FerretCOT<BumblebeeIO>>(
+    ferret_ = std::make_shared<emp::FerretCOT<CheetahIO>>(
         role, thread, io_holder_.data(), malicious, run_setup);
 
     OtBaseTyp seed;
@@ -309,12 +309,12 @@ struct EmpFerretOT::Impl {
     std::vector<OtBaseTyp> rcm_output(n);
     RecvRandCorrelatedMsgChosenChoice(choices, absl::MakeSpan(rcm_output));
 
-    size_t pack_load = 8 * sizeof(T) / bit_width;
     std::array<OtBaseTyp, kOTBatchSize> pad;
     std::vector<T> corr_output(kOTBatchSize);
     std::vector<T> packed_corr_output;
-    if (pack_load > 1) {
-      packed_corr_output.resize(CeilDiv(corr_output.size(), pack_load));
+    size_t packed_sze = CeilDiv(corr_output.size() * bit_width, sizeof(T) * 8);
+    if (packed_sze < corr_output.size()) {
+      packed_corr_output.resize(packed_sze);
     }
 
     for (size_t i = 0; i < n; i += kOTBatchSize) {
@@ -324,8 +324,8 @@ struct EmpFerretOT::Impl {
                   this_batch * sizeof(OtBaseTyp));
       ferret_->mitccrh.template hash<kOTBatchSize, 1>(pad.data());
 
-      if (pack_load > 1) {
-        size_t used = CeilDiv(this_batch, pack_load);
+      if (!packed_corr_output.empty()) {
+        size_t used = CeilDiv(this_batch * bit_width, sizeof(T) * 8);
         io_->recv_data(packed_corr_output.data(), sizeof(T) * used);
         UnzipArray<T>({packed_corr_output.data(), used}, bit_width,
                       {corr_output.data(), this_batch});
@@ -447,12 +447,12 @@ struct EmpFerretOT::Impl {
 
     SendRandCorrelatedMsgChosenChoice(rcm_output.get(), n);
 
-    size_t pack_load = 8 * sizeof(T) / bit_width;
     std::array<OtBaseTyp, 2 * kOTBatchSize> pad;
     std::vector<T> corr_output(kOTBatchSize);
     std::vector<T> packed_corr_output;
-    if (pack_load > 1) {
-      packed_corr_output.resize(CeilDiv(corr_output.size(), pack_load));
+    size_t packed_sze = CeilDiv(corr_output.size() * bit_width, sizeof(T) * 8);
+    if (packed_sze < corr_output.size()) {
+      packed_corr_output.resize(packed_sze);
     }
 
     for (size_t i = 0; i < n; i += kOTBatchSize) {
@@ -470,10 +470,10 @@ struct EmpFerretOT::Impl {
         corr_output[j] += corr[i + j] + output[i + j];
       }
 
-      if (pack_load > 1) {
+      if (not packed_corr_output.empty()) {
         size_t used = ZipArray<T>({corr_output.data(), this_batch}, bit_width,
                                   absl::MakeSpan(packed_corr_output));
-        SPU_ENFORCE(used == CeilDiv(this_batch, pack_load));
+        SPU_ENFORCE(used == CeilDiv(this_batch * bit_width, sizeof(T) * 8));
         io_->send_data(packed_corr_output.data(), used * sizeof(T));
       } else {
         io_->send_data(corr_output.data(), sizeof(T) * this_batch);
@@ -532,19 +532,19 @@ struct EmpFerretOT::Impl {
     SendRandCorrelatedMsgChosenChoice(rcm_data.get(), n);
 
     // async a random seed
+    // NOTE(lwj): shall we really need to sync seed for each call ?
     // emp::block seed;
     // ferret_->prg.random_block(&seed, 1);
     // io_->send_block(&seed, 1);
     // io_->flush();
     // ferret_->mitccrh.setS(seed);
 
-    const size_t pack_load = 8 * sizeof(T) / bit_width;
     std::vector<OtBaseTyp> pad(kOTBatchSize * N);
     std::vector<T> to_send(kOTBatchSize * N);
+    size_t packed_sze = CeilDiv(to_send.size() * bit_width, sizeof(T) * 8);
     std::vector<T> packed_to_send;
-    if (pack_load > 1) {
-      // NOTE: pack bit chunks into single T element if possible
-      packed_to_send.resize(CeilDiv(to_send.size(), pack_load));
+    if (packed_sze < to_send.size()) {
+      packed_to_send.resize(packed_sze);
     }
 
     for (size_t i = 0; i < n; i += kOTBatchSize) {
@@ -564,13 +564,13 @@ struct EmpFerretOT::Impl {
         to_send[2 * j + 1] = ConvFromBlock<T>(pad[2 * j + 1]) ^ this_msg[1];
       }
 
-      if (pack_load == 1) {
-        io_->send_data(to_send.data(), sizeof(T) * this_batch * N);
-      } else {
+      if (not packed_to_send.empty()) {
         size_t used = ZipArray<T>({to_send.data(), N * this_batch}, bit_width,
                                   absl::MakeSpan(packed_to_send));
-        SPU_ENFORCE(used == CeilDiv(N * this_batch, pack_load));
+        SPU_ENFORCE(used == CeilDiv(N * this_batch * bit_width, sizeof(T) * 8));
         io_->send_data(packed_to_send.data(), used * sizeof(T));
+      } else {
+        io_->send_data(to_send.data(), sizeof(T) * this_batch * N);
       }
     }
   }
@@ -597,13 +597,13 @@ struct EmpFerretOT::Impl {
     // ferret_->mitccrh.setS(seed);
 
     const T msg_mask = makeBitsMask<T>(bit_width);
-    const size_t pack_load = 8 * sizeof(T) / bit_width;
 
     std::vector<OtBaseTyp> pad(kOTBatchSize);
     std::vector<T> recv(kOTBatchSize * N);
+    size_t packed_sze = CeilDiv(recv.size() * bit_width, sizeof(T) * 8);
     std::vector<T> packed_recv;
-    if (pack_load > 1) {
-      packed_recv.resize(CeilDiv(recv.size(), pack_load));
+    if (packed_sze < recv.size()) {
+      packed_recv.resize(packed_sze);
     }
 
     for (size_t i = 0; i < n; i += kOTBatchSize) {
@@ -613,10 +613,10 @@ struct EmpFerretOT::Impl {
       }
       ferret_->mitccrh.template hash<kOTBatchSize, 1>(pad.data());
 
-      if (pack_load == 1) {
+      if (packed_recv.empty()) {
         io_->recv_data(recv.data(), N * this_batch * sizeof(T));
       } else {
-        size_t used = CeilDiv(N * this_batch, pack_load);
+        size_t used = CeilDiv(N * this_batch * bit_width, sizeof(T) * 8);
         io_->recv_data(packed_recv.data(), used * sizeof(T));
         UnzipArray<T>({packed_recv.data(), used}, bit_width,
                       {recv.data(), N * this_batch});
@@ -668,11 +668,10 @@ struct EmpFerretOT::Impl {
     std::vector<OtBaseTyp> pad(kOTBatchSize * N);
 
     const T msg_mask = makeBitsMask<T>(bit_width);
-    bool packable = 8 * sizeof(T) > bit_width;
-    size_t packed_sze = CeilDiv(bit_width * N * kOTBatchSize, sizeof(T) * 8);
     std::vector<T> to_send(kOTBatchSize * N);
     std::vector<T> packed_to_send;
-    if (packable) {
+    size_t packed_sze = CeilDiv(to_send.size() * bit_width, sizeof(T) * 8);
+    if (packed_sze < to_send.size()) {
       // NOTE: pack bit chunks into single T element if possible
       packed_to_send.resize(packed_sze);
     }
@@ -712,7 +711,7 @@ struct EmpFerretOT::Impl {
         }
       }
 
-      if (packable) {
+      if (not packed_to_send.empty()) {
         size_t used = ZipArrayBit<T>({to_send.data(), N * this_batch},
                                      bit_width, absl::MakeSpan(packed_to_send));
         SPU_ENFORCE(used == CeilDiv(N * this_batch * bit_width, sizeof(T) * 8));
@@ -759,6 +758,7 @@ struct EmpFerretOT::Impl {
     std::vector<T> recv(kOTBatchSize * N);
     const size_t packed_size = CeilDiv(recv.size() * bit_width, sizeof(T) * 8);
     std::vector<T> packed_recv(packed_size);
+
     for (size_t i = 0; i < n; i += kOTBatchSize) {
       size_t this_batch = std::min(kOTBatchSize, n - i);
       size_t used = CeilDiv(N * this_batch * bit_width, sizeof(T) * 8);
@@ -823,16 +823,16 @@ struct EmpFerretOT::Impl {
   }
 };
 
-EmpFerretOT::EmpFerretOT(std::shared_ptr<Communicator> conn, bool is_sender,
+EmpFerretOt::EmpFerretOt(std::shared_ptr<Communicator> conn, bool is_sender,
                          bool malicious) {
   impl_ = std::make_shared<Impl>(conn, is_sender, malicious);
 }
 
-int EmpFerretOT::Rank() const { return impl_->Rank(); }
+int EmpFerretOt::Rank() const { return impl_->Rank(); }
 
-void EmpFerretOT::Flush() { impl_->Flush(); }
+void EmpFerretOt::Flush() { impl_->Flush(); }
 
-EmpFerretOT::~EmpFerretOT() { impl_->Flush(); }
+EmpFerretOt::~EmpFerretOt() { impl_->Flush(); }
 
 template <typename T>
 size_t CheckBitWidth(size_t bw) {
@@ -845,25 +845,25 @@ size_t CheckBitWidth(size_t bw) {
 }
 
 #define DEF_SEND_RECV(T)                                                      \
-  void EmpFerretOT::SendCAMCC(absl::Span<const T> corr, absl::Span<T> output, \
+  void EmpFerretOt::SendCAMCC(absl::Span<const T> corr, absl::Span<T> output, \
                               int bw) {                                       \
     impl_->SendCorrelatedMsgChosenChoice<T>(corr, output, bw);                \
   }                                                                           \
-  void EmpFerretOT::RecvCAMCC(absl::Span<const uint8_t> choices,              \
+  void EmpFerretOt::RecvCAMCC(absl::Span<const uint8_t> choices,              \
                               absl::Span<T> output, int bw) {                 \
     impl_->RecvCorrelatedMsgChosenChoice<T>(choices, output, bw);             \
   }                                                                           \
-  void EmpFerretOT::SendRMRC(absl::Span<T> output0, absl::Span<T> output1,    \
+  void EmpFerretOt::SendRMRC(absl::Span<T> output0, absl::Span<T> output1,    \
                              size_t bit_width) {                              \
     bit_width = CheckBitWidth<T>(bit_width);                                  \
     impl_->SendRandMsgRandChoice<T>(output0, output1, bit_width);             \
   }                                                                           \
-  void EmpFerretOT::RecvRMRC(absl::Span<uint8_t> choices,                     \
+  void EmpFerretOt::RecvRMRC(absl::Span<uint8_t> choices,                     \
                              absl::Span<T> output, size_t bit_width) {        \
     bit_width = CheckBitWidth<T>(bit_width);                                  \
     impl_->RecvRandMsgRandChoice<T>(choices, output, bit_width);              \
   }                                                                           \
-  void EmpFerretOT::SendCMCC(absl::Span<const T> msg_array, size_t N,         \
+  void EmpFerretOt::SendCMCC(absl::Span<const T> msg_array, size_t N,         \
                              size_t bit_width) {                              \
     bit_width = CheckBitWidth<T>(bit_width);                                  \
     if (N == 2) {                                                             \
@@ -872,7 +872,7 @@ size_t CheckBitWidth(size_t bw) {
     }                                                                         \
     impl_->SendChosenMsgChosenChoice<T>(msg_array, N, bit_width);             \
   }                                                                           \
-  void EmpFerretOT::RecvCMCC(absl::Span<const uint8_t> choices, size_t N,     \
+  void EmpFerretOt::RecvCMCC(absl::Span<const uint8_t> choices, size_t N,     \
                              absl::Span<T> output, size_t bit_width) {        \
     bit_width = CheckBitWidth<T>(bit_width);                                  \
     if (N == 2) {                                                             \
@@ -881,12 +881,12 @@ size_t CheckBitWidth(size_t bw) {
     }                                                                         \
     impl_->RecvChosenMsgChosenChoice<T>(choices, N, output, bit_width);       \
   }                                                                           \
-  void EmpFerretOT::SendRMCC(absl::Span<T> output0, absl::Span<T> output1,    \
+  void EmpFerretOt::SendRMCC(absl::Span<T> output0, absl::Span<T> output1,    \
                              size_t bit_width) {                              \
     bit_width = CheckBitWidth<T>(bit_width);                                  \
     impl_->SendRMCC<T>(output0, output1, bit_width);                          \
   }                                                                           \
-  void EmpFerretOT::RecvRMCC(absl::Span<const uint8_t> choices,               \
+  void EmpFerretOt::RecvRMCC(absl::Span<const uint8_t> choices,               \
                              absl::Span<T> output, size_t bit_width) {        \
     bit_width = CheckBitWidth<T>(bit_width);                                  \
     impl_->RecvRMCC<T>(choices, output, bit_width);                           \

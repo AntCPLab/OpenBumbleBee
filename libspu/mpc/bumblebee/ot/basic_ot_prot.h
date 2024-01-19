@@ -16,19 +16,13 @@
 
 #include "libspu/core/ndarray_ref.h"
 #include "libspu/mpc/bumblebee/ot/ferret_ot_interface.h"
+#include "libspu/mpc/common/communicator.h"
 
 namespace spu::mpc::bumblebee {
 
 class BasicOTProtocols {
  public:
-  enum class FerretOTImpl {
-    default_impl,
-    emp,
-    yacl,
-  };
-
-  explicit BasicOTProtocols(std::shared_ptr<Communicator> conn,
-                            FerretOTImpl impl = FerretOTImpl::default_impl);
+  explicit BasicOTProtocols(std::shared_ptr<Communicator> conn);
 
   ~BasicOTProtocols();
 
@@ -73,9 +67,9 @@ class BasicOTProtocols {
                                                  const NdArrayRef &rhs0,
                                                  const NdArrayRef &rhs1);
 
-  std::shared_ptr<FerretOTInterface> GetSenderCOT() { return ferret_sender_; }
+  std::shared_ptr<FerretOtInterface> GetSenderCOT() { return ferret_sender_; }
 
-  std::shared_ptr<FerretOTInterface> GetReceiverCOT() {
+  std::shared_ptr<FerretOtInterface> GetReceiverCOT() {
     return ferret_receiver_;
   }
 
@@ -88,8 +82,8 @@ class BasicOTProtocols {
 
  private:
   std::shared_ptr<Communicator> conn_;
-  std::shared_ptr<FerretOTInterface> ferret_sender_;
-  std::shared_ptr<FerretOTInterface> ferret_receiver_;
+  std::shared_ptr<FerretOtInterface> ferret_sender_;
+  std::shared_ptr<FerretOtInterface> ferret_receiver_;
 };
 
 }  // namespace spu::mpc::bumblebee

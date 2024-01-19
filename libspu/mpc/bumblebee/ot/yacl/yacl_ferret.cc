@@ -12,17 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "libspu/mpc/bumblebee/ot/yacl_ferret/yacl_ferret.h"
+#include "libspu/mpc/bumblebee/ot/yacl/yacl_ferret.h"
 
 #include <utility>
 
 #include "spdlog/spdlog.h"
 #include "yacl/base/buffer.h"
+#include "yacl/crypto/tools/crhash.h"
+#include "yacl/crypto/tools/rp.h"
 #include "yacl/link/link.h"
 
 #include "libspu/mpc/bumblebee/ot/util.h"
-#include "libspu/mpc/bumblebee/ot/yacl_ferret/mitccrh_exp.h"
-#include "libspu/mpc/bumblebee/ot/yacl_ferret/yacl_ote_adaptor.h"
+#include "libspu/mpc/bumblebee/ot/yacl/mitccrh_exp.h"
+#include "libspu/mpc/bumblebee/ot/yacl/yacl_ote_adapter.h"
+#include "libspu/mpc/bumblebee/ot/yacl/yacl_util.h"
 
 namespace spu::mpc::bumblebee {
 
@@ -74,6 +77,12 @@ class BufferedIO {
     send_buffer_used_ = 0;
   }
 
+  void fill_recv() {
+    recv_buffer_ = conn_->recv<uint8_t>(
+        conn_->nextRank(), fmt::format("BufferedIO recv:{}", recv_op_++));
+    recv_buffer_used_ = 0;
+  }
+
   void send_data(const void* data, int len) {
     size_t send_buffer_left = SEND_BUFFER_SIZE - send_buffer_used_;
     if (send_buffer_left <= static_cast<size_t>(len)) {
@@ -110,66 +119,67 @@ class BufferedIO {
                 len - recv_buffer_left);
     }
   }
-
-  void fill_recv() {
-    recv_buffer_ = conn_->recv<uint8_t>(
-        conn_->nextRank(), fmt::format("BufferedIO recv:{}", recv_op_++));
-    recv_buffer_used_ = 0;
-  }
 };
 
-struct YaclFerretOT::Impl {
+struct YaclFerretOt::Impl {
  private:
   const bool is_sender_;
 
-  std::unique_ptr<BufferedIO> io_ = nullptr;
-  std::shared_ptr<Communicator> conn_ = nullptr;
-  std::unique_ptr<YaclOTeAdaptor> ferret_ = nullptr;
+  std::shared_ptr<BufferedIO> io_{nullptr};
+  std::shared_ptr<YaclOTeAdapter> otx_prot_{nullptr};
 
   MITCCRHExp<8> mitccrh_exp_{};
 
   inline void SendRCOT(absl::Span<uint128_t> output) {
     SPU_ENFORCE(is_sender_);
-    ferret_->send_rcot(output);
+    otx_prot_->send_rcot(output);
   }
 
   inline void RecvRCOT(absl::Span<uint8_t> choices,
                        absl::Span<uint128_t> output) {
     SPU_ENFORCE(!is_sender_);
-    ferret_->recv_rcot(output, choices);
+    otx_prot_->recv_rcot(output, choices);
   }
 
   inline void SendCOT(uint128_t* output, size_t n) {
     SPU_ENFORCE(is_sender_);
-    ferret_->send_cot(absl::MakeSpan(output, n));
+    otx_prot_->send_cot(absl::MakeSpan(output, n));
   }
 
   inline void RecvCOT(absl::Span<const uint8_t> choices,
                       absl::Span<uint128_t> output) {
     SPU_ENFORCE(!is_sender_);
-    ferret_->recv_cot(output, choices);
+    otx_prot_->recv_cot(output, choices);
   }
 
  public:
-  Impl(std::shared_ptr<Communicator> conn, bool is_sender, bool malicious)
+  Impl(std::shared_ptr<Communicator> conn, bool is_sender, bool is_ferret)
       : is_sender_(is_sender) {
-    SPU_ENFORCE(malicious == false,
-                "YACL does NOT support malicious ferret ote");
     SPU_ENFORCE(conn != nullptr);
-    io_ = std::make_unique<BufferedIO>(conn);
-    // conn_ = conn;
-    ferret_ = std::make_unique<YaclFerretOTeAdaptor>(conn->lctx(), is_sender);
-    ferret_->OneTimeSetup();
+
+    io_ = std::make_shared<BufferedIO>(conn);
+    if (is_ferret) {
+      otx_prot_ =
+          std::make_shared<YaclFerretOTeAdapter>(conn->lctx(), is_sender);
+      otx_prot_->OneTimeSetup();
+    } else {
+      otx_prot_ =
+          std::make_shared<YaclSsOTeAdapter>(conn->lctx(), is_sender, /*k*/ 4);
+      otx_prot_->OneTimeSetup();
+    }
   }
 
   ~Impl() = default;
 
   int Rank() const { return io_->conn_->getRank(); }
 
-  void Flush() { io_->flush(); }
+  void Flush() {
+    if (io_) {
+      io_->flush();
+    }
+  }
 
   void SendRandCorrelatedMsgChosenChoice(uint128_t* output, size_t n) {
-    SPU_ENFORCE(is_sender_);
     SendCOT(output, n);
   }
 
@@ -184,7 +194,7 @@ struct YaclFerretOT::Impl {
     SendRandCorrelatedMsgChosenChoice(msg0, n);
     auto msg_span0 = absl::MakeSpan(msg0, n);
     auto msg_span1 = absl::MakeSpan(msg1, n);
-    auto delta = ferret_->GetDelta();
+    auto delta = otx_prot_->GetDelta();
 
     // Use CrHash to Break the correlated randomness
     for (uint64_t i = 0; i < n; ++i) {
@@ -206,6 +216,62 @@ struct YaclFerretOT::Impl {
   }
 
   template <typename T>
+  void SendCorrelatedMsgChosenChoice(absl::Span<const T> corr,
+                                     absl::Span<T> output, int bit_width) {
+    size_t n = corr.size();
+    SPU_ENFORCE_EQ(n, output.size());
+    if (bit_width == 0) {
+      bit_width = 8 * sizeof(T);
+    }
+    SPU_ENFORCE(bit_width > 0 && bit_width <= (int)(8 * sizeof(T)),
+                "bit_width={} out-of-range T={} bits", bit_width,
+                sizeof(T) * 8);
+
+    yacl::Buffer buf(n * sizeof(uint128_t));
+    auto rcm_output = MakeSpan_Uint128(buf);
+
+    SendRandCorrelatedMsgChosenChoice(rcm_output.data(), n);
+
+    std::array<uint128_t, 2 * kOTBatchSize> pad;
+    std::vector<T> corr_output(kOTBatchSize);
+
+    size_t eltsize = 8 * sizeof(T);
+    bool packable = eltsize > (size_t)bit_width;
+    size_t packed_size = CeilDiv(kOTBatchSize * bit_width, eltsize);
+
+    std::vector<T> packed_corr_output;
+    if (packable) {
+      packed_corr_output.resize(packed_size);
+    }
+
+    for (size_t i = 0; i < n; i += kOTBatchSize) {
+      size_t this_batch = std::min(kOTBatchSize, n - i);
+      for (size_t j = 0; j < this_batch; ++j) {
+        pad[2 * j] = rcm_output[i + j];
+        pad[2 * j + 1] = rcm_output[i + j] ^ otx_prot_->GetDelta();
+      }
+
+      yc::ParaCrHashInplace_128(absl::MakeSpan(pad));
+
+      for (size_t j = 0; j < this_batch; ++j) {
+        output[i + j] = (T)(pad[2 * j]);
+        corr_output[j] = (T)(pad[2 * j + 1]);
+        corr_output[j] += corr[i + j] + output[i + j];
+      }
+
+      if (packable) {
+        size_t used = ZipArray<T>({corr_output.data(), this_batch}, bit_width,
+                                  absl::MakeSpan(packed_corr_output));
+        SPU_ENFORCE(used == CeilDiv(this_batch * bit_width, eltsize));
+        io_->send_data(packed_corr_output.data(), used * sizeof(T));
+      } else {
+        io_->send_data(corr_output.data(), sizeof(T) * this_batch);
+      }
+    }
+    io_->flush();
+  }
+
+  template <typename T>
   void RecvCorrelatedMsgChosenChoice(absl::Span<const uint8_t> choices,
                                      absl::Span<T> output, int bit_width) {
     size_t n = choices.size();
@@ -217,15 +283,21 @@ struct YaclFerretOT::Impl {
                 "bit_width={} out-of-range T={} bits", bit_width,
                 sizeof(T) * 8);
 
-    yacl::AlignedVector<uint128_t> rcm_output(n);
-    RecvRandCorrelatedMsgChosenChoice(choices, absl::MakeSpan(rcm_output));
+    yacl::Buffer buf(n * sizeof(uint128_t));
+    auto rcm_output = MakeSpan_Uint128(buf);
 
-    size_t pack_load = 8 * sizeof(T) / bit_width;
+    RecvRandCorrelatedMsgChosenChoice(choices, rcm_output);
+
     std::array<uint128_t, kOTBatchSize> pad;
     std::vector<T> corr_output(kOTBatchSize);
+
+    size_t eltsize = 8 * sizeof(T);
+    bool packable = eltsize > (size_t)bit_width;
+    size_t packed_size = CeilDiv(kOTBatchSize * bit_width, eltsize);
+
     std::vector<T> packed_corr_output;
-    if (pack_load > 1) {
-      packed_corr_output.resize(CeilDiv(corr_output.size(), pack_load));
+    if (packable) {
+      packed_corr_output.resize(packed_size);
     }
 
     for (size_t i = 0; i < n; i += kOTBatchSize) {
@@ -236,8 +308,8 @@ struct YaclFerretOT::Impl {
       // Use CrHash
       yc::ParaCrHashInplace_128(absl::MakeSpan(pad));
 
-      if (pack_load > 1) {
-        size_t used = CeilDiv(this_batch, pack_load);
+      if (packable) {
+        size_t used = CeilDiv(this_batch * bit_width, eltsize);
         io_->recv_data(packed_corr_output.data(), sizeof(T) * used);
         UnzipArray<T>({packed_corr_output.data(), used}, bit_width,
                       {corr_output.data(), this_batch});
@@ -270,7 +342,7 @@ struct YaclFerretOT::Impl {
     SPU_ENFORCE(n > 0);
     SPU_ENFORCE_EQ(n, output1.size());
     SendRCOT(output0);
-    auto delta = ferret_->GetDelta();
+    auto delta = otx_prot_->GetDelta();
 
     // Use CrHash to Break the correlated randomness
     for (uint64_t i = 0; i < n; ++i) {
@@ -284,10 +356,13 @@ struct YaclFerretOT::Impl {
                                  size_t n) {
     SPU_ENFORCE(msg0 != nullptr && msg1 != nullptr);
     SPU_ENFORCE(n > 0);
-    yacl::AlignedVector<uint128_t> rcm_data(n);
+
+    yacl::Buffer buf(n * sizeof(uint128_t));
+    auto rcm_data = MakeSpan_Uint128(buf);
+
     SendRandCorrelatedMsgChosenChoice(rcm_data.data(), n);
 
-    uint128_t delta = ferret_->GetDelta();
+    uint128_t delta = otx_prot_->GetDelta();
     std::array<uint128_t, 2 * kOTBatchSize> pad;
     for (size_t i = 0; i < n; i += kOTBatchSize) {
       size_t this_batch = std::min(kOTBatchSize, n - i);
@@ -305,6 +380,7 @@ struct YaclFerretOT::Impl {
 
       io_->send_data(pad.data(), 2 * sizeof(uint128_t) * this_batch);
     }
+    io_->flush();
   }
 
   void RecvChosenMsgChosenChoice(absl::Span<const uint8_t> choices,
@@ -329,56 +405,6 @@ struct YaclFerretOT::Impl {
   }
 
   template <typename T>
-  void SendCorrelatedMsgChosenChoice(absl::Span<const T> corr,
-                                     absl::Span<T> output, int bit_width) {
-    size_t n = corr.size();
-    SPU_ENFORCE_EQ(n, output.size());
-    if (bit_width == 0) {
-      bit_width = 8 * sizeof(T);
-    }
-    SPU_ENFORCE(bit_width > 0 && bit_width <= (int)(8 * sizeof(T)),
-                "bit_width={} out-of-range T={} bits", bit_width,
-                sizeof(T) * 8);
-
-    yacl::AlignedVector<uint128_t> rcm_output(n);
-
-    SendRandCorrelatedMsgChosenChoice(rcm_output.data(), n);
-
-    size_t pack_load = 8 * sizeof(T) / bit_width;
-    std::array<uint128_t, 2 * kOTBatchSize> pad;
-    std::vector<T> corr_output(kOTBatchSize);
-    std::vector<T> packed_corr_output;
-    if (pack_load > 1) {
-      packed_corr_output.resize(CeilDiv(corr_output.size(), pack_load));
-    }
-
-    for (size_t i = 0; i < n; i += kOTBatchSize) {
-      size_t this_batch = std::min(kOTBatchSize, n - i);
-      for (size_t j = 0; j < this_batch; ++j) {
-        pad[2 * j] = rcm_output[i + j];
-        pad[2 * j + 1] = rcm_output[i + j] ^ ferret_->GetDelta();
-      }
-
-      yc::ParaCrHashInplace_128(absl::MakeSpan(pad));
-
-      for (size_t j = 0; j < this_batch; ++j) {
-        output[i + j] = (T)(pad[2 * j]);
-        corr_output[j] = (T)(pad[2 * j + 1]);
-        corr_output[j] += corr[i + j] + output[i + j];
-      }
-
-      if (pack_load > 1) {
-        size_t used = ZipArray<T>({corr_output.data(), this_batch}, bit_width,
-                                  absl::MakeSpan(packed_corr_output));
-        SPU_ENFORCE(used == CeilDiv(this_batch, pack_load));
-        io_->send_data(packed_corr_output.data(), used * sizeof(T));
-      } else {
-        io_->send_data(corr_output.data(), sizeof(T) * this_batch);
-      }
-    }
-  }
-
-  template <typename T>
   void SendRandMsgRandChoice(absl::Span<T> output0, absl::Span<T> output1,
                              size_t bit_width = 0) {
     size_t n = output0.size();
@@ -386,15 +412,17 @@ struct YaclFerretOT::Impl {
     SPU_ENFORCE_EQ(n, output1.size());
     const T mask = makeBitsMask<T>(bit_width);
 
-    yacl::AlignedVector<uint128_t> rm_data(2 * n);
-    auto* rm_data0 = rm_data.data();
-    auto* rm_data1 = rm_data.data() + n;
-    SendRandMsgRandChoice({rm_data0, n}, {rm_data1, n});
+    yacl::Buffer buf(2 * n * sizeof(uint128_t));
+    auto rm_data = MakeSpan_Uint128(buf);
 
-    std::transform(rm_data0, rm_data0 + n, output0.data(),
-                   [mask](uint128_t x) { return (T)x & mask; });
-    std::transform(rm_data1, rm_data1 + n, output1.data(),
-                   [mask](uint128_t x) { return (T)x & mask; });
+    auto rm_data0 = rm_data.subspan(0, n);
+    auto rm_data1 = rm_data.subspan(n, n);
+    SendRandMsgRandChoice(rm_data0, rm_data1);
+
+    std::transform(rm_data0.cbegin(), rm_data0.cend(), output0.data(),
+                   [mask](const uint128_t& x) { return (T)x & mask; });
+    std::transform(rm_data1.cbegin(), rm_data1.cend(), output1.data(),
+                   [mask](const uint128_t& x) { return (T)x & mask; });
   }
 
   template <typename T>
@@ -405,12 +433,13 @@ struct YaclFerretOT::Impl {
     SPU_ENFORCE_EQ(n, output.size());
     const T mask = makeBitsMask<T>(bit_width);
 
-    yacl::AlignedVector<uint128_t> rm_data(n);
+    yacl::Buffer buf(n * sizeof(uint128_t));
+    auto rm_data = MakeSpan_Uint128(buf);
 
-    RecvRandMsgRandChoice(choices, absl::MakeSpan(rm_data));
+    RecvRandMsgRandChoice(choices, rm_data);
 
-    std::transform(rm_data.begin(), rm_data.end(), output.data(),
-                   [mask](uint128_t x) { return ((T)x) & mask; });
+    std::transform(rm_data.cbegin(), rm_data.cend(), output.data(),
+                   [mask](const uint128_t& x) { return ((T)x) & mask; });
   }
 
   template <typename T>
@@ -429,13 +458,18 @@ struct YaclFerretOT::Impl {
     // Send: (s_{0, j}, s_{1, j}) for 0 <= j < logN
     // Recv:  c_j \in {0, 1}
 
-    yacl::AlignedVector<uint128_t> rm_data0(n * logN);
-    yacl::AlignedVector<uint128_t> rm_data1(n * logN);
+    yacl::Buffer buf_data0(n * logN * sizeof(uint128_t));
+    yacl::Buffer buf_data1(n * logN * sizeof(uint128_t));
+    auto rm_data0 = MakeSpan_Uint128(buf_data0);
+    auto rm_data1 = MakeSpan_Uint128(buf_data1);
 
     SendRandMsgChosenChoice(rm_data0.data(), rm_data1.data(), n * logN);
 
-    yacl::AlignedVector<uint128_t> hash_in0(N - 1);
-    yacl::AlignedVector<uint128_t> hash_in1(N - 1);
+    yacl::Buffer buf_in0((N - 1) * sizeof(uint128_t));
+    yacl::Buffer buf_in1((N - 1) * sizeof(uint128_t));
+    auto hash_in0 = MakeSpan_Uint128(buf_in0);
+    auto hash_in1 = MakeSpan_Uint128(buf_in1);
+
     {
       size_t idx = 0;
       for (size_t x = 0; x < logN; ++x) {
@@ -447,18 +481,24 @@ struct YaclFerretOT::Impl {
       }
     }
 
-    yacl::AlignedVector<uint128_t> hash_out0(N - 1);
-    yacl::AlignedVector<uint128_t> hash_out1(N - 1);
-    yacl::AlignedVector<uint128_t> pad(kOTBatchSize * N);
+    yacl::Buffer buf_out0((N - 1) * sizeof(uint128_t));
+    yacl::Buffer buf_out1((N - 1) * sizeof(uint128_t));
+    yacl::Buffer buf_pad(kOTBatchSize * N * sizeof(uint128_t));
+
+    auto hash_out0 = MakeSpan_Uint128(buf_out0);
+    auto hash_out1 = MakeSpan_Uint128(buf_out1);
+    auto pad = MakeSpan_Uint128(buf_pad);
 
     const T msg_mask = makeBitsMask<T>(bit_width);
-    bool packable = 8 * sizeof(T) > bit_width;
-    size_t packed_sze = CeilDiv(bit_width * N * kOTBatchSize, sizeof(T) * 8);
+    size_t eltsize = 8 * sizeof(T);
+    bool packable = eltsize > (size_t)bit_width;
+
     std::vector<T> to_send(kOTBatchSize * N);
+    size_t packed_size = CeilDiv(kOTBatchSize * N * bit_width, eltsize);
     std::vector<T> packed_to_send;
     if (packable) {
       // NOTE: pack bit chunks into single T element if possible
-      packed_to_send.resize(packed_sze);
+      packed_to_send.resize(packed_size);
     }
 
     for (size_t i = 0; i < n; i += kOTBatchSize) {
@@ -466,10 +506,12 @@ struct YaclFerretOT::Impl {
       std::memset(pad.data(), 0, pad.size() * sizeof(uint128_t));
 
       for (size_t j = 0; j < this_batch; ++j) {
-        mitccrh_exp_.renew_ks(&rm_data0[(i + j) * logN], logN);
+        mitccrh_exp_.renew_ks(
+            reinterpret_cast<uint128_t*>(&rm_data0[(i + j) * logN]), logN);
         mitccrh_exp_.hash_exp(hash_out0.data(), hash_in0.data(), logN);
 
-        mitccrh_exp_.renew_ks(&rm_data1[(i + j) * logN], logN);
+        mitccrh_exp_.renew_ks(
+            reinterpret_cast<uint128_t*>(&rm_data1[(i + j) * logN]), logN);
         mitccrh_exp_.hash_exp(hash_out1.data(), hash_in1.data(), logN);
 
         for (size_t k = 0; k < N; ++k) {
@@ -498,14 +540,15 @@ struct YaclFerretOT::Impl {
       }
 
       if (packable) {
-        size_t used = ZipArrayBit<T>({to_send.data(), N * this_batch},
-                                     bit_width, absl::MakeSpan(packed_to_send));
-        SPU_ENFORCE(used == CeilDiv(N * this_batch * bit_width, sizeof(T) * 8));
+        size_t used = ZipArray<T>({to_send.data(), N * this_batch}, bit_width,
+                                  absl::MakeSpan(packed_to_send));
+        SPU_ENFORCE(used == CeilDiv(N * this_batch * bit_width, eltsize));
         io_->send_data(packed_to_send.data(), used * sizeof(T));
       } else {
         io_->send_data(to_send.data(), N * this_batch * sizeof(T));
       }
     }
+    io_->flush();
   }
 
   template <typename T>
@@ -523,7 +566,7 @@ struct YaclFerretOT::Impl {
                             [N](uint8_t b) { return b < N; }),
                 "choice out-of-bound N");
     std::vector<uint8_t> bool_choices(n * logN, 0);
-    // decompose into binary form
+    // decomposite into binary form
     for (size_t i = 0; i < n; ++i) {
       uint8_t c = choices[i];
       for (size_t j = 0; j < logN; ++j, c >>= 1) {
@@ -533,26 +576,40 @@ struct YaclFerretOT::Impl {
 
     // rm_data[logN * i + k] = 1-of-2 OT on the k-th bits of the i-th
     // message
-    yacl::AlignedVector<uint128_t> rm_data(n * logN);
-    RecvRandMsgChosenChoice(absl::MakeSpan(bool_choices),
-                            absl::MakeSpan(rm_data));
+    yacl::Buffer buf(n * logN * sizeof(uint128_t));
+    auto rm_data = MakeSpan_Uint128(buf);
 
-    yacl::AlignedVector<uint128_t> hash_in(logN);
-    yacl::AlignedVector<uint128_t> hash_out(logN);
-    yacl::AlignedVector<uint128_t> pad(kOTBatchSize);
+    RecvRandMsgChosenChoice(absl::MakeSpan(bool_choices), rm_data);
+
+    yacl::Buffer buf_in(logN * sizeof(uint128_t));
+    yacl::Buffer buf_out(logN * sizeof(uint128_t));
+    yacl::Buffer buf_pad(kOTBatchSize * sizeof(uint128_t));
+
+    auto hash_in = MakeSpan_Uint128(buf_in);
+    auto hash_out = MakeSpan_Uint128(buf_out);
+    auto pad = MakeSpan_Uint128(buf_pad);
 
     const T msg_mask = makeBitsMask<T>(bit_width);
+    size_t eltsize = 8 * sizeof(T);
+    bool packable = eltsize > (size_t)bit_width;
+    size_t packed_size = CeilDiv(kOTBatchSize * N * bit_width, eltsize);
+
     std::vector<T> recv(kOTBatchSize * N);
-    const size_t packed_size = CeilDiv(recv.size() * bit_width, sizeof(T) * 8);
-    std::vector<T> packed_recv(packed_size);
+    std::vector<T> packed_recv;
+    if (packable) {
+      packed_recv.resize(packed_size);
+    }
 
     for (size_t i = 0; i < n; i += kOTBatchSize) {
       size_t this_batch = std::min(kOTBatchSize, n - i);
-      size_t used = CeilDiv(N * this_batch * bit_width, sizeof(T) * 8);
-      io_->recv_data(packed_recv.data(), used * sizeof(T));
-
-      UnzipArrayBit<T>({packed_recv.data(), used}, bit_width,
-                       {recv.data(), N * this_batch});
+      size_t used = CeilDiv(N * this_batch * bit_width, eltsize);
+      if (packable) {
+        io_->recv_data(packed_recv.data(), used * sizeof(T));
+        UnzipArray<T>({packed_recv.data(), used}, bit_width,
+                      {recv.data(), N * this_batch});
+      } else {
+        io_->recv_data(recv.data(), N * this_batch * sizeof(T));
+      }
 
       std::memset(pad.data(), 0, kOTBatchSize * sizeof(uint128_t));
       for (size_t j = 0; j < this_batch; ++j) {
@@ -560,7 +617,8 @@ struct YaclFerretOT::Impl {
           auto h = choices[i + j] & makeBitsMask<uint8_t>(1 + s);
           hash_in[s] = yacl::MakeUint128(h, 0);
         }
-        mitccrh_exp_.renew_ks(&rm_data[(i + j) * logN], logN);
+        mitccrh_exp_.renew_ks(
+            reinterpret_cast<uint128_t*>(&rm_data[(i + j) * logN]), logN);
         mitccrh_exp_.hash_single(hash_out.data(), hash_in.data(), logN);
 
         pad[j] = std::accumulate(hash_out.begin(), hash_out.end(), pad[j],
@@ -580,17 +638,21 @@ struct YaclFerretOT::Impl {
     SPU_ENFORCE(n > 0);
     SPU_ENFORCE_EQ(n, output1.size());
 
-    yacl::AlignedVector<uint128_t> rm_data(2 * n);
+    yacl::Buffer buf(2 * n * sizeof(uint128_t));
+    auto rm_data = MakeSpan_Uint128(buf);
+
     auto* rm_data0 = rm_data.data();
     auto* rm_data1 = rm_data0 + n;
     SendRandMsgChosenChoice(rm_data0, rm_data1, n);
 
     // Type conversion
     const T msg_mask = makeBitsMask<T>(bit_width);
-    std::transform(rm_data0, rm_data0 + n, output0.data(),
-                   [msg_mask](uint128_t val) { return ((T)val) & msg_mask; });
-    std::transform(rm_data1, rm_data1 + n, output1.data(),
-                   [msg_mask](uint128_t val) { return ((T)val) & msg_mask; });
+    std::transform(
+        rm_data0, rm_data0 + n, output0.data(),
+        [msg_mask](const uint128_t& val) { return ((T)val) & msg_mask; });
+    std::transform(
+        rm_data1, rm_data1 + n, output1.data(),
+        [msg_mask](const uint128_t& val) { return ((T)val) & msg_mask; });
   }
 
   // Modified by @wenfan
@@ -601,13 +663,16 @@ struct YaclFerretOT::Impl {
     SPU_ENFORCE(n > 0);
     SPU_ENFORCE_EQ(n, output.size());
 
-    yacl::AlignedVector<uint128_t> rm_data(n);
-    RecvRandMsgChosenChoice(choices, absl::MakeSpan(rm_data));
+    yacl::Buffer buf(n * sizeof(uint128_t));
+    auto rm_data = MakeSpan_Uint128(buf);
+
+    RecvRandMsgChosenChoice(choices, rm_data);
 
     // Type conversion
     const T msg_mask = makeBitsMask<T>(bit_width);
-    std::transform(rm_data.begin(), rm_data.end(), output.begin(),
-                   [msg_mask](uint128_t val) { return ((T)val) & msg_mask; });
+    std::transform(
+        rm_data.begin(), rm_data.end(), output.begin(),
+        [msg_mask](const uint128_t& val) { return ((T)val) & msg_mask; });
   }
 
   // Inplace
@@ -677,19 +742,27 @@ struct YaclFerretOT::Impl {
   }
 };
 
-YaclFerretOT::YaclFerretOT(std::shared_ptr<Communicator> conn, bool is_sender,
-                           bool malicious) {
-  impl_ = std::make_shared<Impl>(conn, is_sender, malicious);
+YaclFerretOt::YaclFerretOt(std::shared_ptr<Communicator> conn, bool is_sender) {
+  impl_ = std::make_shared<Impl>(conn, is_sender, /*is_ferret*/ true);
 }
 
-int YaclFerretOT::Rank() const { return impl_->Rank(); }
-
-void YaclFerretOT::Flush() { impl_->Flush(); }
-
-YaclFerretOT::~YaclFerretOT() {
-  impl_->Flush();
-  // SPDLOG_INFO(fmt::format("Party {} - Destroying YaclFerretOT", (Rank())));
+YaclSpokenSoftOt::YaclSpokenSoftOt(std::shared_ptr<Communicator> conn,
+                                   bool is_sender) {
+  impl_ = std::make_shared<YaclFerretOt::Impl>(conn, is_sender,
+                                               /*is_ferret*/ false);
 }
+
+int YaclFerretOt::Rank() const { return impl_->Rank(); }
+
+void YaclFerretOt::Flush() { impl_->Flush(); }
+
+YaclFerretOt::~YaclFerretOt() { impl_->Flush(); }
+
+int YaclSpokenSoftOt::Rank() const { return impl_->Rank(); }
+
+void YaclSpokenSoftOt::Flush() { impl_->Flush(); }
+
+YaclSpokenSoftOt::~YaclSpokenSoftOt() { impl_->Flush(); }
 
 template <typename T>
 size_t CheckBitWidth(size_t bw) {
@@ -702,41 +775,79 @@ size_t CheckBitWidth(size_t bw) {
 }
 
 #define DEF_SEND_RECV(T)                                                       \
-  void YaclFerretOT::SendCAMCC(absl::Span<const T> corr, absl::Span<T> output, \
+  void YaclFerretOt::SendCAMCC(absl::Span<const T> corr, absl::Span<T> output, \
                                int bw) {                                       \
     impl_->SendCorrelatedMsgChosenChoice<T>(corr, output, bw);                 \
   }                                                                            \
-  void YaclFerretOT::RecvCAMCC(absl::Span<const uint8_t> choices,              \
+  void YaclFerretOt::RecvCAMCC(absl::Span<const uint8_t> choices,              \
                                absl::Span<T> output, int bw) {                 \
     impl_->RecvCorrelatedMsgChosenChoice<T>(choices, output, bw);              \
   }                                                                            \
-  void YaclFerretOT::SendRMRC(absl::Span<T> output0, absl::Span<T> output1,    \
+  void YaclFerretOt::SendRMRC(absl::Span<T> output0, absl::Span<T> output1,    \
                               size_t bit_width) {                              \
     bit_width = CheckBitWidth<T>(bit_width);                                   \
     impl_->SendRandMsgRandChoice<T>(output0, output1, bit_width);              \
   }                                                                            \
-  void YaclFerretOT::RecvRMRC(absl::Span<uint8_t> choices,                     \
+  void YaclFerretOt::RecvRMRC(absl::Span<uint8_t> choices,                     \
                               absl::Span<T> output, size_t bit_width) {        \
     bit_width = CheckBitWidth<T>(bit_width);                                   \
     impl_->RecvRandMsgRandChoice<T>(choices, output, bit_width);               \
   }                                                                            \
-  void YaclFerretOT::SendCMCC(absl::Span<const T> msg_array, size_t N,         \
+  void YaclFerretOt::SendCMCC(absl::Span<const T> msg_array, size_t N,         \
                               size_t bit_width) {                              \
     bit_width = CheckBitWidth<T>(bit_width);                                   \
     impl_->SendChosenMsgChosenChoice<T>(msg_array, N, bit_width);              \
   }                                                                            \
-  void YaclFerretOT::RecvCMCC(absl::Span<const uint8_t> choices, size_t N,     \
+  void YaclFerretOt::RecvCMCC(absl::Span<const uint8_t> choices, size_t N,     \
                               absl::Span<T> output, size_t bit_width) {        \
     bit_width = CheckBitWidth<T>(bit_width);                                   \
     impl_->RecvChosenMsgChosenChoice<T>(choices, N, output, bit_width);        \
   }                                                                            \
-  void YaclFerretOT::SendRMCC(absl::Span<T> output0, absl::Span<T> output1,    \
+  void YaclFerretOt::SendRMCC(absl::Span<T> output0, absl::Span<T> output1,    \
                               size_t bit_width) {                              \
     bit_width = CheckBitWidth<T>(bit_width);                                   \
     impl_->SendRMCC<T>(output0, output1, bit_width);                           \
   }                                                                            \
-  void YaclFerretOT::RecvRMCC(absl::Span<const uint8_t> choices,               \
+  void YaclFerretOt::RecvRMCC(absl::Span<const uint8_t> choices,               \
                               absl::Span<T> output, size_t bit_width) {        \
+    bit_width = CheckBitWidth<T>(bit_width);                                   \
+    impl_->RecvRMCC<T>(choices, output, bit_width);                            \
+  }                                                                            \
+  void YaclSpokenSoftOt::SendCAMCC(absl::Span<const T> corr,                   \
+                                   absl::Span<T> output, int bw) {             \
+    impl_->SendCorrelatedMsgChosenChoice<T>(corr, output, bw);                 \
+  }                                                                            \
+  void YaclSpokenSoftOt::RecvCAMCC(absl::Span<const uint8_t> choices,          \
+                                   absl::Span<T> output, int bw) {             \
+    impl_->RecvCorrelatedMsgChosenChoice<T>(choices, output, bw);              \
+  }                                                                            \
+  void YaclSpokenSoftOt::SendRMRC(absl::Span<T> output0,                       \
+                                  absl::Span<T> output1, size_t bit_width) {   \
+    bit_width = CheckBitWidth<T>(bit_width);                                   \
+    impl_->SendRandMsgRandChoice<T>(output0, output1, bit_width);              \
+  }                                                                            \
+  void YaclSpokenSoftOt::RecvRMRC(absl::Span<uint8_t> choices,                 \
+                                  absl::Span<T> output, size_t bit_width) {    \
+    bit_width = CheckBitWidth<T>(bit_width);                                   \
+    impl_->RecvRandMsgRandChoice<T>(choices, output, bit_width);               \
+  }                                                                            \
+  void YaclSpokenSoftOt::SendCMCC(absl::Span<const T> msg_array, size_t N,     \
+                                  size_t bit_width) {                          \
+    bit_width = CheckBitWidth<T>(bit_width);                                   \
+    impl_->SendChosenMsgChosenChoice<T>(msg_array, N, bit_width);              \
+  }                                                                            \
+  void YaclSpokenSoftOt::RecvCMCC(absl::Span<const uint8_t> choices, size_t N, \
+                                  absl::Span<T> output, size_t bit_width) {    \
+    bit_width = CheckBitWidth<T>(bit_width);                                   \
+    impl_->RecvChosenMsgChosenChoice<T>(choices, N, output, bit_width);        \
+  }                                                                            \
+  void YaclSpokenSoftOt::SendRMCC(absl::Span<T> output0,                       \
+                                  absl::Span<T> output1, size_t bit_width) {   \
+    bit_width = CheckBitWidth<T>(bit_width);                                   \
+    impl_->SendRMCC<T>(output0, output1, bit_width);                           \
+  }                                                                            \
+  void YaclSpokenSoftOt::RecvRMCC(absl::Span<const uint8_t> choices,           \
+                                  absl::Span<T> output, size_t bit_width) {    \
     bit_width = CheckBitWidth<T>(bit_width);                                   \
     impl_->RecvRMCC<T>(choices, output, bit_width);                            \
   }

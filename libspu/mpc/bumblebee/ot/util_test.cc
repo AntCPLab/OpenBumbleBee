@@ -22,18 +22,18 @@
 
 namespace spu::mpc::bumblebee::test {
 
-class UtilTest : public ::testing::TestWithParam<FieldType> {
+class OtUtilTest : public ::testing::TestWithParam<FieldType> {
   void SetUp() override {}
 };
 
 INSTANTIATE_TEST_SUITE_P(
-    Bumblebee, UtilTest,
+    Cheetah, OtUtilTest,
     testing::Values(FieldType::FM32, FieldType::FM64, FieldType::FM128),
-    [](const testing::TestParamInfo<UtilTest::ParamType> &p) {
+    [](const testing::TestParamInfo<OtUtilTest::ParamType> &p) {
       return fmt::format("{}", p.param);
     });
 
-TEST_P(UtilTest, ZipArray) {
+TEST_P(OtUtilTest, ZipArray) {
   const int64_t n = 200;
   const auto field = GetParam();
   const size_t elsze = SizeOf(field);
@@ -63,7 +63,7 @@ TEST_P(UtilTest, ZipArray) {
   });
 }
 
-TEST_P(UtilTest, ZipArrayBit) {
+TEST_P(OtUtilTest, ZipArrayBit) {
   const size_t n = 1000;
   const auto field = GetParam();
 

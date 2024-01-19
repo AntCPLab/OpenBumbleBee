@@ -48,8 +48,6 @@ bool TestEnvFlag(EnvFlag e) {
       return IsEnvOn("SPU_BB_ENABLE_APPROX_LESS_THAN", true);
     case EnvFlag::SPU_BB_ENABLE_MUL_ERROR:
       return IsEnvOn("SPU_BB_ENABLE_MUL_ERROR", true);
-    case EnvFlag::SPU_BB_ENABLE_EMP_FERRET:
-      return IsEnvOn("SPU_BB_ENABLE_EMP_FERRET", true);
     default:
       return false;
   }
@@ -59,6 +57,8 @@ int TestEnvInt(EnvFlag e) {
   switch (e) {
     case EnvFlag::SPU_BB_SET_IEQUAL_BITS:
       return GetEnvInt(("SPU_BB_SET_IEQUAL_BITS"));
+    case EnvFlag::SPU_BB_SET_OT_TYPE:
+      return GetEnvInt(("SPU_BB_SET_OT_TYPE"));
     default:
       break;
   }
