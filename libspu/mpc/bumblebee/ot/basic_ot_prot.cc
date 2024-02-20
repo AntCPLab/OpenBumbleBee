@@ -109,7 +109,7 @@ NdArrayRef BasicOTProtocols::PackedB2A(const NdArrayRef &inp) {
   auto rand = convert_from_bits_form(rand_bits);
 
   // open c = x ^ r
-  auto opened = OpenShare(ring_xor(inp, rand), ReduceOp::XOR, conn_, nbits);
+  auto opened = OpenShare(ring_xor(inp, rand), ReduceOp::XOR, nbits, conn_);
 
   // compute c + (1 - 2*c)*<r>
   NdArrayRef oup = ring_zeros(field, inp.shape());
@@ -231,7 +231,7 @@ NdArrayRef BasicOTProtocols::BitwiseAnd(const NdArrayRef &lhs,
     });
   });
 
-  concat = OpenShare(concat, ReduceOp::XOR, conn_, shareType->nbits());
+  concat = OpenShare(concat, ReduceOp::XOR, shareType->nbits(), conn_);
   auto xa = concat.slice({0}, {n}, {1}).reshape(lhs.shape());
   auto yb = concat.slice({n}, {2 * n}, {1}).reshape(lhs.shape());
 
@@ -274,7 +274,7 @@ std::array<NdArrayRef, 2> BasicOTProtocols::CorrelatedBitwiseAnd(
     });
   });
 
-  concat = OpenShare(concat, ReduceOp::XOR, conn_, shareType->nbits());
+  concat = OpenShare(concat, ReduceOp::XOR, shareType->nbits(), conn_);
   auto xa = concat.slice({0}, {n}, {1}).reshape(lhs.shape());
   auto y0b0 = concat.slice({n}, {2 * n}, {1}).reshape(lhs.shape());
   auto y1b1 = concat.slice({2 * n}, {3 * n}, {1}).reshape(lhs.shape());

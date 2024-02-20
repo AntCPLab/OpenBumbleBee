@@ -33,7 +33,7 @@ class BumblebeeMulImpl {
 
   ~BumblebeeMulImpl();
 
-  void Initialize(FieldType field);
+  void Initialize(FieldType field, uint32_t msg_width = 0);
 
   int Rank() const;
 
@@ -75,6 +75,8 @@ class BumblebeeMul {
   BumblebeeMul(const BumblebeeMul&) = delete;
 
   BumblebeeMul(BumblebeeMul&&) = delete;
+
+  void LazyInitKeys(FieldType field, uint32_t msg_width_hint = 0);
 
   NdArrayRef MulOLE(const NdArrayRef& inp, yacl::link::Context* conn,
                     bool is_evaluator, uint32_t msg_width_hint = 0);

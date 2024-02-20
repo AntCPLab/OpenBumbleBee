@@ -133,6 +133,7 @@ NdArrayRef MulAA::squareDirectly(KernelEvalContext* ctx,
   // = x0^2 + 2*<x0*x1> + x1^2
   auto* comm = ctx->getState<Communicator>();
   auto* mul_prot = ctx->getState<BumblebeeMulState>()->get();
+  mul_prot->LazyInitKeys(x.eltype().as<Ring2k>()->field());
   const int rank = comm->getRank();
 
   auto fx = x.reshape({numel});
@@ -166,7 +167,7 @@ NdArrayRef MulAA::proc(KernelEvalContext* ctx, const NdArrayRef& x,
   SPU_ENFORCE_EQ(x.shape(), y.shape());
 
   auto* mul_prot = ctx->getState<BumblebeeMulState>()->get()->getImpl();
-  mul_prot->Initialize(ctx->sctx()->getField());
+  mul_prot->Initialize(x.eltype().as<Ring2k>()->field());
 
   int64_t batch_sze = mul_prot->OLEBatchSize();
   int64_t numel = x.numel();
@@ -224,6 +225,8 @@ NdArrayRef MulAA::mulDirectly(KernelEvalContext* ctx, const NdArrayRef& x,
   // Compute the cross terms x0*y1, x1*y0 homomorphically
   auto* comm = ctx->getState<Communicator>();
   auto* mul_prot = ctx->getState<BumblebeeMulState>()->get();
+  mul_prot->LazyInitKeys(x.eltype().as<Ring2k>()->field());
+
   const int rank = comm->getRank();
   auto fx = x.reshape({x.numel()});
   auto fy = y.reshape({y.numel()});
@@ -288,6 +291,7 @@ NdArrayRef MulAV::mulDirectly(KernelEvalContext* ctx, const NdArrayRef& x,
   }
 
   auto* mul_prot = ctx->getState<BumblebeeMulState>()->get();
+  mul_prot->LazyInitKeys(ptype->field());
   // (x0 * x1) * y
   // <x0 * y> + x1 * y
   auto fx = x.reshape({numel});

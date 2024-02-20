@@ -102,7 +102,7 @@ class BumblebeeOTState : public State {
 
  public:
   static constexpr char kBindName[] = "BumblebeeOT";
-  static constexpr size_t kMaxNumOtInstances = 24;
+  static constexpr size_t kMaxNumOtInstances = 4;
 
   explicit BumblebeeOTState() : basic_ot_prot_(kMaxNumOtInstances) {}
 

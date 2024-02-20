@@ -38,47 +38,44 @@ void U8ToBool(absl::Span<uint8_t> bits, uint8_t u8) {
   }
 }
 
-NdArrayRef OpenShare(const NdArrayRef& shr, ReduceOp op,
-                     std::shared_ptr<Communicator> comm, size_t nbits) {
+NdArrayRef OpenShare(const NdArrayRef &shr, ReduceOp op, size_t nbits,
+                     std::shared_ptr<Communicator> conn) {
+  SPU_ENFORCE(conn != nullptr);
   SPU_ENFORCE(shr.eltype().isa<Ring2k>());
+  SPU_ENFORCE(op == ReduceOp::ADD or op == ReduceOp::XOR);
+
   auto field = shr.eltype().as<Ring2k>()->field();
   size_t fwidth = SizeOf(field) * 8;
   if (nbits == 0) {
     nbits = fwidth;
   }
-  SPU_ENFORCE(nbits <= fwidth);
-
-  int64_t pack_load = fwidth / nbits;
-  if (pack_load == 1) {
-    return comm->allReduce(op, shr, "open");
+  SPU_ENFORCE(nbits <= fwidth, "nbits out-of-bound");
+  bool packable = fwidth > nbits;
+  if (not packable) {
+    return conn->allReduce(op, shr, "open");
   }
 
-  int64_t numel = shr.numel();
-  int64_t compact_numel = CeilDiv(numel, pack_load);
+  size_t numel = shr.numel();
+  size_t compact_numel = CeilDiv(numel * nbits, fwidth);
 
-  NdArrayRef out(shr.eltype(), {numel});
+  NdArrayRef out(shr.eltype(), {(int64_t)numel});
   DISPATCH_ALL_FIELDS(field, "zip", [&]() {
-    NdArrayView<const ring2k_t> inp(shr);
-    NdArrayView<ring2k_t> oup(out);
-    int64_t used = ZipArray(inp, nbits, oup);
+    auto inp = absl::MakeConstSpan(&shr.at<ring2k_t>(0), numel);
+    auto oup = absl::MakeSpan(&out.at<ring2k_t>(0), compact_numel);
+
+    size_t used = ZipArray(inp, nbits, oup);
     SPU_ENFORCE_EQ(used, compact_numel);
 
     std::vector<ring2k_t> opened;
     if (op == ReduceOp::XOR) {
-      opened = comm->allReduce<ring2k_t, std::bit_xor>(
-          absl::MakeConstSpan(&oup[0], compact_numel), "open");
-    } else if (op == ReduceOp::ADD) {
-      opened = comm->allReduce<ring2k_t, std::plus>(
-          absl::MakeConstSpan(&oup[0], compact_numel), "open");
+      opened = conn->allReduce<ring2k_t, std::bit_xor>(oup, "open");
+    } else {
+      opened = conn->allReduce<ring2k_t, std::plus>(oup, "open");
     }
 
-    {
-      absl::Span<ring2k_t> oup(&out.at<ring2k_t>(0), numel);
-      UnzipArray(absl::MakeConstSpan(opened), nbits, oup);
-    }
+    oup = absl::MakeSpan(&out.at<ring2k_t>(0), numel);
+    UnzipArray(absl::MakeConstSpan(opened), nbits, oup);
   });
-
   return out.reshape(shr.shape());
 }
-
 }  // namespace spu::mpc::bumblebee

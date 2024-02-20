@@ -46,107 +46,6 @@ template <typename T>
 size_t ZipArray(absl::Span<const T> inp, size_t bit_width, absl::Span<T> oup) {
   size_t width = sizeof(T) * 8;
   SPU_ENFORCE(bit_width > 0 && width >= bit_width);
-  size_t shft = bit_width;
-  size_t pack_load = width / shft;
-  size_t numel = inp.size();
-  size_t packed_sze = CeilDiv(numel, pack_load);
-  SPU_ENFORCE(oup.size() >= packed_sze);
-
-  const T mask = makeBitsMask<T>(bit_width);
-  for (size_t i = 0; i < numel; i += pack_load) {
-    size_t this_batch = std::min(pack_load, numel - i);
-    T acc{0};
-    for (size_t j = 0; j < this_batch; ++j) {
-      acc = (acc << shft) | (inp[i + j] & mask);
-    }
-    oup[i / pack_load] = acc;
-  }
-  return packed_sze;
-}
-
-template <typename T>
-size_t UnzipArray(absl::Span<const T> inp, size_t bit_width,
-                  absl::Span<T> oup) {
-  constexpr size_t width = sizeof(T) * 8;
-  SPU_ENFORCE(bit_width > 0 && bit_width <= width);
-
-  size_t shft = bit_width;
-  size_t pack_load = width / shft;
-  size_t packed_sze = inp.size();
-  size_t n = oup.size();
-  SPU_ENFORCE(n > 0 && n <= pack_load * packed_sze);
-
-  const T mask = makeBitsMask<T>(bit_width);
-  for (size_t i = 0; i < packed_sze; ++i) {
-    size_t j0 = std::min(n, i * pack_load);
-    size_t j1 = std::min(n, j0 + pack_load);
-    size_t this_batch = j1 - j0;
-    T package = inp[i];
-    // NOTE (reversed order)
-    for (size_t j = 0; j < this_batch; ++j) {
-      oup[j1 - 1 - j] = package & mask;
-      package >>= shft;
-    }
-  }
-
-  return n;
-}
-
-template <typename T>
-size_t ZipArray(NdArrayView<const T> inp, size_t bit_width,
-                NdArrayView<T> oup) {
-  size_t width = sizeof(T) * 8;
-  SPU_ENFORCE(bit_width > 0 && width >= bit_width);
-  size_t shft = bit_width;
-  size_t pack_load = width / shft;
-  size_t numel = inp.numel();
-  size_t packed_sze = CeilDiv(numel, pack_load);
-  SPU_ENFORCE((size_t)oup.numel() >= packed_sze);
-
-  const T mask = makeBitsMask<T>(bit_width);
-  for (size_t i = 0; i < numel; i += pack_load) {
-    size_t this_batch = std::min(pack_load, numel - i);
-    T acc{0};
-    for (size_t j = 0; j < this_batch; ++j) {
-      acc = (acc << shft) | (inp[i + j] & mask);
-    }
-    oup[i / pack_load] = acc;
-  }
-  return packed_sze;
-}
-
-template <typename T>
-size_t UnzipArray(NdArrayView<const T> inp, size_t bit_width,
-                  NdArrayView<T> oup) {
-  constexpr size_t width = sizeof(T) * 8;
-  SPU_ENFORCE(bit_width > 0 && bit_width <= width);
-
-  size_t shft = bit_width;
-  size_t pack_load = width / shft;
-  size_t packed_sze = inp.numel();
-  size_t n = oup.numel();
-  SPU_ENFORCE(n > 0 && n <= pack_load * packed_sze);
-
-  const T mask = makeBitsMask<T>(bit_width);
-  for (size_t i = 0; i < packed_sze; ++i) {
-    size_t j0 = std::min(n, i * pack_load);
-    size_t j1 = std::min(n, j0 + pack_load);
-    size_t this_batch = j1 - j0;
-    T package = inp[i];
-    // NOTE (reversed order)
-    for (size_t j = 0; j < this_batch; ++j) {
-      oup[j1 - 1 - j] = package & mask;
-      package >>= shft;
-    }
-  }
-  return n;
-}
-
-template <typename T>
-size_t ZipArrayBit(absl::Span<const T> inp, size_t bit_width,
-                   absl::Span<T> oup) {
-  constexpr size_t width = sizeof(T) * 8;
-  SPU_ENFORCE(bit_width > 0 && width >= bit_width);
   size_t numel = inp.size();
   size_t packed_sze = CeilDiv(numel * bit_width, width);
 
@@ -172,8 +71,8 @@ size_t ZipArrayBit(absl::Span<const T> inp, size_t bit_width,
 }
 
 template <typename T>
-size_t UnzipArrayBit(absl::Span<const T> inp, size_t bit_width,
-                     absl::Span<T> oup) {
+size_t UnzipArray(absl::Span<const T> inp, size_t bit_width,
+                  absl::Span<T> oup) {
   size_t width = sizeof(T) * 8;
   SPU_ENFORCE(bit_width > 0 && bit_width <= width);
 
@@ -198,6 +97,18 @@ size_t UnzipArrayBit(absl::Span<const T> inp, size_t bit_width,
 }
 
 template <typename T>
+size_t ZipArrayBit(absl::Span<const T> inp, size_t bit_width,
+                   absl::Span<T> oup) {
+  return ZipArray<T>(inp, bit_width, oup);
+}
+
+template <typename T>
+size_t UnzipArrayBit(absl::Span<const T> inp, size_t bit_width,
+                     absl::Span<T> oup) {
+  return UnzipArray<T>(inp, bit_width, oup);
+}
+
+template <typename T>
 size_t PackU8Array(absl::Span<const uint8_t> u8array, absl::Span<T> packed) {
   constexpr size_t elsze = sizeof(T);
   const size_t nbytes = u8array.size();
@@ -217,11 +128,11 @@ size_t PackU8Array(absl::Span<const uint8_t> u8array, absl::Span<T> packed) {
   return numel;
 }
 
+NdArrayRef OpenShare(const NdArrayRef &shr, ReduceOp op, size_t nbits,
+                     std::shared_ptr<Communicator> conn);
+
 uint8_t BoolToU8(absl::Span<const uint8_t> bits);
 
 void U8ToBool(absl::Span<uint8_t> bits, uint8_t u8);
-
-NdArrayRef OpenShare(const NdArrayRef& shr, ReduceOp op,
-                     std::shared_ptr<Communicator> comm, size_t nbits = 0);
 
 }  // namespace spu::mpc::bumblebee

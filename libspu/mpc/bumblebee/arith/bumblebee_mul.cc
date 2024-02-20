@@ -16,8 +16,9 @@
 namespace spu::mpc::bumblebee {
 
 BumblebeeMul::BumblebeeMul(std::shared_ptr<yacl::link::Context> lctx,
-                       bool allow_high_prob_one_bit_error) {
-  impl_ = std::make_shared<BumblebeeMulImpl>(lctx, allow_high_prob_one_bit_error);
+                           bool allow_high_prob_one_bit_error) {
+  impl_ =
+      std::make_shared<BumblebeeMulImpl>(lctx, allow_high_prob_one_bit_error);
 }
 
 BumblebeeMul::~BumblebeeMul() = default;
@@ -29,17 +30,24 @@ size_t BumblebeeMul::OLEBatchSize() const {
   return impl_->OLEBatchSize();
 }
 
-NdArrayRef BumblebeeMul::MulOLE(const NdArrayRef &inp, yacl::link::Context *conn,
-                              bool is_evaluator, uint32_t msg_width_hint) {
+NdArrayRef BumblebeeMul::MulOLE(const NdArrayRef &inp,
+                                yacl::link::Context *conn, bool is_evaluator,
+                                uint32_t msg_width_hint) {
   SPU_ENFORCE(impl_ != nullptr);
   SPU_ENFORCE(conn != nullptr);
   return impl_->MulOLE(inp, conn, is_evaluator, msg_width_hint);
 }
 
 NdArrayRef BumblebeeMul::MulOLE(const NdArrayRef &inp, bool is_evaluator,
-                              uint32_t msg_width_hint) {
+                                uint32_t msg_width_hint) {
   SPU_ENFORCE(impl_ != nullptr);
   return impl_->MulOLE(inp, nullptr, is_evaluator, msg_width_hint);
+}
+
+void BumblebeeMul::LazyInitKeys(FieldType field, uint32_t msg_width_hint) {
+  SPU_ENFORCE(impl_ != nullptr);
+  SPU_ENFORCE(msg_width_hint <= SizeOf(field) * 8);
+  return impl_->Initialize(field, msg_width_hint);
 }
 
 }  // namespace spu::mpc::bumblebee

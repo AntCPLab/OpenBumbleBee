@@ -26,17 +26,19 @@
 namespace spu::kernel::hal::intrinsic::nn {
 
 static std::array<Value, 3> ComputeUptoPower4(SPUContext* ctx, const Value& x) {
-  if (not x.isSecret() || ctx->config().protocol() != ProtocolKind::BUMBLEBEE) {
-    auto x2 = f_square(ctx, x);
-    auto x4 = f_square(ctx, x2);
-    auto x3 = f_mul(ctx, x, x2);
-    return {x2, x3, x4};
-  }
-
-  KernelEvalContext kctx(ctx);
-  auto [_x2, _x3, _x4] =
-      spu::mpc::bumblebee::ComputeUptoPower4(&kctx, x.data());
-  return {Value(_x2, x.dtype()), Value(_x3, x.dtype()), Value(_x4, x.dtype())};
+  // if (not x.isSecret() || ctx->config().protocol() !=
+  // ProtocolKind::BUMBLEBEE) {
+  auto x2 = f_square(ctx, x);
+  auto x4 = f_square(ctx, x2);
+  auto x3 = f_mul(ctx, x, x2);
+  return {x2, x3, x4};
+  // }
+  //
+  // KernelEvalContext kctx(ctx);
+  // auto [_x2, _x3, _x4] =
+  //     spu::mpc::bumblebee::ComputeUptoPower4(&kctx, x.data());
+  // return {Value(_x2, x.dtype()), Value(_x3, x.dtype()), Value(_x4,
+  // x.dtype())};
 }
 
 static std::vector<Value> ComputedBatchLessAP(SPUContext* ctx, const Value& x,
@@ -91,7 +93,7 @@ static Value f_gelu_bumblebee(SPUContext* ctx, const Value& _x) {
   auto b0 = _xor(ctx, _xor(ctx, ONE, batch_less_than[0]), b2);
 
   // x = b1 ? x : -x
-  auto abs_x = _mux(ctx, b1, x, _negate(ctx, x));
+  auto abs_x = _mux(ctx, b1, x, _negate(ctx, x)).setDtype(x.dtype());
 
   // seg = a*|x|^4 + b*|x|^3 + c*|x|^2 + d*|x| + e + 0.5x
   std::vector<float> coeffs = {0.001620808531841547, -0.03798164612714154,

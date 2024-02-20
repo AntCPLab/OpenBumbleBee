@@ -71,6 +71,7 @@ void BumblebeeMulState::makeSureCacheSize(FieldType field, int64_t numel) {
   //   Then the beaver (a0, b0, c0) and (a1, b1, c1)
   //   where c0 = a0*b0 + <a0*b1> + <a1*b0>
   //         c1 = a1*b1 + <a0*b1> + <a1*b0>
+  mul_prot_->LazyInitKeys(field);
   const int rank = mul_prot_->Rank();
   const int64_t ole_sze = mul_prot_->OLEBatchSize();
   const int64_t num_ole = CeilDiv<size_t>(2 * numel, ole_sze);

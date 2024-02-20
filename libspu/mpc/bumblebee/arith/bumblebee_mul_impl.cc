@@ -14,6 +14,7 @@
 #include <functional>
 #include <future>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -26,7 +27,6 @@
 #include "seal/keygenerator.h"
 #include "seal/publickey.h"
 #include "seal/secretkey.h"
-#include "seal/util/locks.h"
 #include "seal/util/polyarithsmallmod.h"
 #include "seal/valcheck.h"
 #include "spdlog/spdlog.h"
@@ -82,10 +82,10 @@ struct BumblebeeMulImpl::Impl : public EnableCPRNG {
 
   constexpr size_t OLEBatchSize() const { return kPolyDegree; }
 
-  void Initialize(FieldType field) {
+  void Initialize(FieldType field, uint32_t msg_width) {
     Options options;
     options.ring_bitlen = SizeOf(field) * 8;
-    options.msg_bitlen = options.ring_bitlen;
+    options.msg_bitlen = msg_width > 0 ? msg_width : options.ring_bitlen;
     LazyExpandSEALContexts(options);
     LazyInitModSwitchHelper(options);
   }
@@ -206,7 +206,6 @@ struct BumblebeeMulImpl::Impl : public EnableCPRNG {
   uint32_t current_crt_plain_bitlen_{0};
 
   // SEAL's contexts for ZZ_{2^k}
-  mutable std::shared_mutex context_lock_;
   std::vector<seal::SEALContext> seal_cntxts_;
 
   // own secret key
@@ -223,7 +222,6 @@ struct BumblebeeMulImpl::Impl : public EnableCPRNG {
 };
 
 void BumblebeeMulImpl::Impl::LazyInitModSwitchHelper(const Options &options) {
-  std::unique_lock<std::shared_mutex> guard(context_lock_);
   if (ms_helpers_.count(options) > 0) {
     return;
   }
@@ -286,7 +284,6 @@ void BumblebeeMulImpl::Impl::LocalExpandSEALContexts(size_t target) {
 void BumblebeeMulImpl::Impl::LazyExpandSEALContexts(const Options &options,
                                                     yacl::link::Context *conn) {
   uint32_t target_plain_bitlen = TotalCRTBitLen(options);
-  std::unique_lock<std::shared_mutex> guard(context_lock_);
   if (current_crt_plain_bitlen_ >= target_plain_bitlen) {
     return;
   }
@@ -349,7 +346,36 @@ void BumblebeeMulImpl::Impl::LazyExpandSEALContexts(const Options &options,
           seal_cntxts_[0], *pair_public_key_));
     } else {
       // For other CRT context, we just copy the sk/pk
-      LocalExpandSEALContexts(idx);
+      // LocalExpandSEALContexts(idx);
+      size_t target = idx;
+      // SPU_ENFORCE(target > 0 && target < seal_cntxts_.size());
+      // SPU_ENFORCE(sym_encryptors_.size() == target);
+      // SPU_ENFORCE(decryptors_.size() == target);
+      // SPU_ENFORCE(pk_encryptors_.size() == target);
+
+      seal::SecretKey sk;
+      sk.data().resize(secret_key_->data().coeff_count());
+      std::copy_n(secret_key_->data().data(), secret_key_->data().coeff_count(),
+                  sk.data().data());
+      sk.parms_id() = seal_cntxts_[target].key_parms_id();
+
+      size_t keysze = pair_public_key_->data().size();
+      size_t numel = pair_public_key_->data().poly_modulus_degree() *
+                     pair_public_key_->data().coeff_modulus_size();
+
+      seal::PublicKey pk;
+      pk.data().resize(seal_cntxts_[target], sk.parms_id(), keysze);
+      std::copy_n(pair_public_key_->data().data(), keysze * numel,
+                  pk.data().data());
+      pk.data().is_ntt_form() = pair_public_key_->data().is_ntt_form();
+      pk.parms_id() = sk.parms_id();
+
+      sym_encryptors_.push_back(
+          std::make_shared<seal::Encryptor>(seal_cntxts_[target], sk));
+      decryptors_.push_back(
+          std::make_shared<seal::Decryptor>(seal_cntxts_[target], sk));
+      pk_encryptors_.push_back(
+          std::make_shared<seal::Encryptor>(seal_cntxts_[target], pk));
     }
 
     bfv_encoders_.push_back(
@@ -900,9 +926,9 @@ NdArrayRef BumblebeeMulImpl::MultiplyThenMask(const NdArrayRef &inp,
   return impl_->MultiplyThenMask(inp, recv_ct);
 }
 
-void BumblebeeMulImpl::Initialize(FieldType field) {
+void BumblebeeMulImpl::Initialize(FieldType field, uint32_t msg_width) {
   SPU_ENFORCE(impl_ != nullptr);
-  return impl_->Initialize(field);
+  return impl_->Initialize(field, msg_width);
 }
 
 }  // namespace spu::mpc::bumblebee
