@@ -24,6 +24,7 @@ try:
     import jax.extend.linear_util as jax_lu  # Moved in jax 0.4.16
 except ImportError:
     import jax.linear_util as jax_lu
+
 from jax._src import api_util as japi_util
 
 from .. import api as spu_api
@@ -69,7 +70,7 @@ class Simulator(object):
             A SPU Simulator
         """
         config = spu_pb2.RuntimeConfig(protocol=prot, field=field)
-        # config.enable_hal_profile = True
+        config.enable_hal_profile = True
         # config.enable_pphlo_profile = True
         # config.enable_pphlo_trace = True
         # config.enable_action_trace = True

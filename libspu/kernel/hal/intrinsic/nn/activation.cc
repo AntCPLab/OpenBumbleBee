@@ -140,9 +140,14 @@ Value f_gelu(SPUContext* ctx, const Value& x) {
   SPU_TRACE_HAL_LEAF(ctx, x);
 
   if (x.isSecret() && ctx->config().protocol() == ProtocolKind::BUMBLEBEE) {
+    // We turn to a BOLT-like gelu
+    // 1. Convert from 64-bit share to 32-bit share (locally)
+    // 2. Compute the gelu over 32-bit share using 3 pieces
+    // 3. Convert back to 64-bit share using ring extension.
     return f_gelu_bumblebee(ctx, x);
   }
 
+  // The Seg4Gelu in the Bumblebee Paper.
   const auto ONE = _constant(ctx, 1, x.shape());
   const auto True = _and(ctx, ONE, ONE);
 

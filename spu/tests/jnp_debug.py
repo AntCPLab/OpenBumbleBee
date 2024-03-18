@@ -17,6 +17,7 @@ import unittest
 
 import jax.numpy as jnp
 import numpy as np
+from jax import nn
 
 import spu.intrinsic as si
 import spu.spu_pb2 as spu_pb2
@@ -35,14 +36,15 @@ if __name__ == "__main__":
     # Tweak compiler options
     copts.disable_div_sqrt_rewrite = True
 
-    x = np.random.randn(3, 5)
-    y = np.random.randn(3, 5)
+    x = np.random.randn(1 << 17)
     # fn = lambda x, y: si.example_binary(x, y)
-    fn = lambda x, y: x * y
+    fn = si.f_gelu
+    # fn = lambda x, y: x * y
     spu_fn = ppsim.sim_jax(sim, fn, copts=copts)
-    z = spu_fn(x, y)
+    g = nn.gelu(x)
+    c = spu_fn(x)
+    print("max diff {}".format(np.max(g - c)))
 
-    print(spu_fn.pphlo)
-
-    print(f"spu out = {z}")
-    print(f"cpu out = {fn(x, y)}")
+    # print(spu_fn.pphlo)
+    # print(f"spu out = {z}")
+    # print(f"cpu out = {fn(x, y)}")
