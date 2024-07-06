@@ -42,6 +42,9 @@ Value i_square(SPUContext* ctx, const Value& x);
 
 Value i_mmul(SPUContext* ctx, const Value& x, const Value& y);
 
+std::optional<Value> i_batch_mmul(SPUContext* ctx, const Value& x,
+                                  const Value& y);
+
 Value i_tensordot(SPUContext* ctx, const Value& x, const Value& y,
                   const Index& ix, const Index& iy);
 

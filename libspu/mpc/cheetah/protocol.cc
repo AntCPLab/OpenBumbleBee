@@ -71,6 +71,8 @@ void regCheetahProtocol(SPUContext* ctx,
                   cheetah::EqualAA, cheetah::EqualAP,                       //
                   cheetah::MatMulAP, cheetah::MatMulAA, cheetah::MatMulAV,  //
                   cheetah::MatMulVVS,                                       //
+                  cheetah::BatchMatMulAA,                                   //
+                  cheetah::BatchMatMulAV,                                   //
                   cheetah::LShiftA, cheetah::ARShiftB, cheetah::LShiftB,    //
                   cheetah::RShiftB,                                         //
                   cheetah::BitrevB,                                         //
