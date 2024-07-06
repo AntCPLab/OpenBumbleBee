@@ -107,7 +107,8 @@ class KernelEvalContext final {
       Axes,                        //
       Index,                       //
       Strides,                     //
-      Sizes                        //
+      Sizes,                       //
+      FieldType                    //
       >;
 
   SPUContext* sctx_;

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include "libspu/mpc/cheetah/arithmetic.h"
-#include "libspu/mpc/cheetah/state.h"
 #include "libspu/mpc/cheetah/type.h"
 #include "libspu/mpc/common/communicator.h"
 #include "libspu/mpc/common/prg_state.h"

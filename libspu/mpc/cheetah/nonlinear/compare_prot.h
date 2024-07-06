@@ -45,16 +45,32 @@ class CompareProtocol {
 
   ~CompareProtocol();
 
+  // The party rank that provides the choice bits in BatchCompute.
+  static constexpr int BatchedChoiceProvider() { return 1; }
+
   NdArrayRef Compute(const NdArrayRef& inp, bool greater_than,
                      int64_t bitwidth = 0);
 
   std::array<NdArrayRef, 2> ComputeWithEq(const NdArrayRef& inp,
                                           bool greater_than,
                                           int64_t bitwidth = 0);
+  // Perform a batch compare where P0's input is a batch
+  // CMP(x1, y), CMP(x2, y), ..., CMP(xB, y)
+  // Output format:
+  // out[i][j] = CMP(x[i][j], y[i]) for i in [0, n) and j in [0, B)
+  //
+  // NOTE: output.shape = (inp.shape(), batch_size)
+  NdArrayRef BatchCompute(const NdArrayRef& inp, bool greater_than,
+                          int64_t numel, int64_t bitwidth,
+                          int64_t batch_size = 1);
 
  private:
   NdArrayRef DoCompute(const NdArrayRef& inp, bool greater_than,
                        NdArrayRef* eq = nullptr, int64_t bitwidth = 0);
+
+  NdArrayRef DoBatchCompute(const NdArrayRef& inp, bool greater_than,
+                            int64_t numelt, int64_t bitwidth,
+                            int64_t batch_size);
 
   NdArrayRef TraversalAND(NdArrayRef cmp, NdArrayRef eq, size_t num_input,
                           size_t num_digits);

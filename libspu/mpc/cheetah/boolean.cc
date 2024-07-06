@@ -16,7 +16,7 @@
 
 #include "libspu/core/ndarray_ref.h"
 #include "libspu/mpc/cheetah/ot/basic_ot_prot.h"
-#include "libspu/mpc/cheetah/state.h"
+#include "libspu/mpc/cheetah/tiled_dispatch.h"
 
 namespace spu::mpc::cheetah {
 
@@ -29,7 +29,7 @@ NdArrayRef AndBB::proc(KernelEvalContext* ctx, const NdArrayRef& lhs,
     return NdArrayRef(lhs.eltype(), lhs.shape());
   }
 
-  return TiledDispatchOTFunc(
+  return DispatchBinaryFunc(
              ctx, lhs, rhs,
              [&](const NdArrayRef& input0, const NdArrayRef& input1,
                  const std::shared_ptr<BasicOTProtocols>& base_ot) {

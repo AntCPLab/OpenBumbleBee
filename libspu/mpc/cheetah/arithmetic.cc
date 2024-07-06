@@ -15,17 +15,16 @@
 #include "libspu/mpc/cheetah/arithmetic.h"
 
 #include <future>
-#include <memory>
 
 #include "libspu/core/ndarray_ref.h"
 #include "libspu/core/trace.h"
-#include "libspu/core/xt_helper.h"
 #include "libspu/mpc/cheetah/arith/common.h"
 #include "libspu/mpc/cheetah/nonlinear/compare_prot.h"
 #include "libspu/mpc/cheetah/nonlinear/equal_prot.h"
 #include "libspu/mpc/cheetah/nonlinear/truncate_prot.h"
 #include "libspu/mpc/cheetah/ot/basic_ot_prot.h"
 #include "libspu/mpc/cheetah/state.h"
+#include "libspu/mpc/cheetah/tiled_dispatch.h"
 #include "libspu/mpc/cheetah/type.h"
 #include "libspu/mpc/common/communicator.h"
 #include "libspu/mpc/common/pv2k.h"
@@ -41,7 +40,7 @@ NdArrayRef TruncA::proc(KernelEvalContext* ctx, const NdArrayRef& x,
     return out;
   }
 
-  return TiledDispatchOTFunc(
+  return DispatchUnaryFunc(
       ctx, x,
       [&](const NdArrayRef& input,
           const std::shared_ptr<BasicOTProtocols>& base_ot) {
@@ -89,7 +88,7 @@ NdArrayRef MsbA2B::proc(KernelEvalContext* ctx, const NdArrayRef& x) const {
       pforeach(0, numel, [&](int64_t i) { xadj[i] = (mask - xinp[i]) & mask; });
     }
 
-    auto carry_bit = TiledDispatchOTFunc(
+    auto carry_bit = DispatchUnaryFunc(
                          ctx, adjusted,
                          [&](const NdArrayRef& input,
                              const std::shared_ptr<BasicOTProtocols>& base_ot) {
@@ -142,7 +141,7 @@ NdArrayRef EqualAA::proc(KernelEvalContext* ctx, const NdArrayRef& x,
     adjusted = ring_sub(y, x);
   }
 
-  return TiledDispatchOTFunc(
+  return DispatchUnaryFunc(
              ctx, adjusted,
              [&](const NdArrayRef& input,
                  const std::shared_ptr<BasicOTProtocols>& base_ot) {
@@ -161,7 +160,7 @@ NdArrayRef MulA1B::proc(KernelEvalContext* ctx, const NdArrayRef& ashr,
     return NdArrayRef(ashr.eltype(), ashr.shape());
   }
 
-  return TiledDispatchOTFunc(
+  return DispatchBinaryFunc(
              ctx, ashr, bshr,
              [&](const NdArrayRef& input0, const NdArrayRef& input1,
                  const std::shared_ptr<BasicOTProtocols>& base_ot) {
@@ -187,7 +186,7 @@ NdArrayRef MulA1BV::proc(KernelEvalContext* ctx, const NdArrayRef& ashr,
   }
 
   if (rank != owner) {
-    return TiledDispatchOTFunc(
+    return DispatchUnaryFunc(
                ctx, ashr,
                [&](const NdArrayRef& input,
                    const std::shared_ptr<BasicOTProtocols>& base_ot) {
@@ -196,7 +195,7 @@ NdArrayRef MulA1BV::proc(KernelEvalContext* ctx, const NdArrayRef& ashr,
         .as(ashr.eltype());
   }
 
-  return TiledDispatchOTFunc(
+  return DispatchBinaryFunc(
              ctx, ashr, bshr,
              [&](const NdArrayRef& input0, const NdArrayRef& input1,
                  const std::shared_ptr<BasicOTProtocols>& base_ot) {

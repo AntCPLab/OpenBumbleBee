@@ -14,7 +14,6 @@
 
 #include "libspu/mpc/cheetah/nonlinear/compare_prot.h"
 
-#include "yacl/crypto/rand/rand.h"
 #include "yacl/crypto/tools/prg.h"
 #include "yacl/link/link.h"
 
@@ -27,31 +26,38 @@
 
 namespace spu::mpc::cheetah {
 
+namespace {
+void SetLeafOTMsg(absl::Span<uint8_t> ot_messages, uint8_t digit,
+                  uint8_t rnd_cmp_bit, uint8_t rnd_eq_bit, bool gt,
+                  size_t batch_shift = 0) {
+  size_t N = ot_messages.size();
+  SPU_ENFORCE(digit <= N, "N={} got digit={}", N, digit);
+  for (size_t i = 0; i < N; i++) {
+    uint8_t eq_cmp = 0;
+    if (gt) {
+      eq_cmp = rnd_cmp_bit ^ static_cast<uint8_t>(digit > i);
+    } else {
+      eq_cmp = rnd_cmp_bit ^ static_cast<uint8_t>(digit < i);
+    }
+    // compact two bits into one OT message
+    eq_cmp |= ((rnd_eq_bit ^ static_cast<uint8_t>(digit == i)) << 1);
+
+    // compact batch eq and cmp bits into one OT message
+    // NOTE(lwj) Now only support Batch size <= 4
+    ot_messages[i] |= (eq_cmp << batch_shift);
+  }
+}
+}  // namespace
+   //
 CompareProtocol::CompareProtocol(const std::shared_ptr<BasicOTProtocols>& base,
                                  size_t compare_radix)
     : compare_radix_(compare_radix), basic_ot_prot_(base) {
   SPU_ENFORCE(base != nullptr);
   SPU_ENFORCE(compare_radix_ >= 1 && compare_radix_ <= 8);
-  is_sender_ = base->Rank() == 0;
+  is_sender_ = base->Rank() != BatchedChoiceProvider();
 }
 
 CompareProtocol::~CompareProtocol() { basic_ot_prot_->Flush(); }
-
-void SetLeafOTMsg(absl::Span<uint8_t> ot_messages, uint8_t digit,
-                  uint8_t rnd_cmp_bit, uint8_t rnd_eq_bit, bool gt) {
-  size_t N = ot_messages.size();
-  SPU_ENFORCE(digit <= N, fmt::format("N={} got digit={}", N, digit));
-  for (size_t i = 0; i < N; i++) {
-    if (gt) {
-      ot_messages[i] = rnd_cmp_bit ^ static_cast<uint8_t>(digit > i);
-    } else {
-      ot_messages[i] = rnd_cmp_bit ^ static_cast<uint8_t>(digit < i);
-    }
-
-    // compact two bits into one OT message
-    ot_messages[i] |= ((rnd_eq_bit ^ static_cast<uint8_t>(digit == i)) << 1);
-  }
-}
 
 // The Mill protocol from "CrypTFlow2: Practical 2-Party Secure Inference"
 // Algorithm 1. REF: https://arxiv.org/pdf/2010.06457.pdf
@@ -82,7 +88,7 @@ NdArrayRef CompareProtocol::DoCompute(const NdArrayRef& inp, bool greater_than,
   std::vector<uint8_t> leaf_eq(num_cmp * num_digits, 0);
   if (is_sender_) {
     // Step 2 sample random bits
-    yacl::crypto::Prg<uint8_t> prg(yacl::crypto::SecureRandSeed());
+    yacl::crypto::Prg<uint8_t> prg;
     prg.Fill(absl::MakeSpan(leaf_cmp));
     prg.Fill(absl::MakeSpan(leaf_eq));
 
@@ -434,6 +440,135 @@ NdArrayRef CompareProtocol::TraversalAND(NdArrayRef cmp, NdArrayRef eq,
   return subtree_cmp;
 }
 
+NdArrayRef CompareProtocol::DoBatchCompute(const NdArrayRef& inp,
+                                           bool greater_than, int64_t numelt,
+                                           int64_t bitwidth,
+                                           int64_t batch_size) {
+  auto field = inp.eltype().as<Ring2k>()->field();
+  SPU_ENFORCE(batch_size);
+  SPU_ENFORCE(bitwidth > 0 && bitwidth <= (int)SizeOf(field) * 8);
+
+  if (bitwidth % compare_radix_ != 0) {
+    bitwidth = CeilDiv<int64_t>(bitwidth, compare_radix_) * compare_radix_;
+  }
+
+  auto num_digits = CeilDiv<int64_t>(bitwidth, compare_radix_);
+  size_t radix = static_cast<size_t>(1) << compare_radix_;  // one-of-N OT
+  size_t num_cmp = numelt * batch_size;
+  // init to all zero
+  std::vector<uint8_t> digits(inp.numel() * num_digits, 0);
+
+  // Step 1 break into digits \in [0, radix)
+  DISPATCH_ALL_FIELDS(field, "break_digits", [&]() {
+    using u2k = std::make_unsigned<ring2k_t>::type;
+    const auto mask_radix = makeBitsMask<u2k>(compare_radix_);
+    NdArrayView<u2k> xinp(inp);
+
+    for (int64_t i = 0; i < inp.numel(); ++i) {
+      for (int64_t j = 0; j < num_digits; ++j) {
+        uint32_t shft = j * compare_radix_;
+        digits[i * num_digits + j] = (xinp[i] >> shft) & mask_radix;
+      }
+    }
+  });
+
+  std::vector<uint8_t> leaf_cmp(num_cmp * num_digits, 0);
+  std::vector<uint8_t> leaf_eq(num_cmp * num_digits, 0);
+  if (is_sender_) {
+    // NOTE(lwj): sender holds the batched message and receiver inputs the
+    // choice bits
+    // Step 2 sample random bits
+    yacl::crypto::Prg<uint8_t> prg;
+    prg.Fill(absl::MakeSpan(leaf_cmp));
+    prg.Fill(absl::MakeSpan(leaf_eq));
+    // convert to boolean
+    std::transform(leaf_cmp.begin(), leaf_cmp.end(), leaf_cmp.data(),
+                   [](uint8_t v) { return v & 1; });
+    std::transform(leaf_eq.begin(), leaf_eq.end(), leaf_eq.data(),
+                   [](uint8_t v) { return v & 1; });
+
+    // Step 6-7 set the OT messages with two packed bits (one for compare, one
+    // for equal)
+    std::vector<uint8_t> _leaf_ot_msg(radix * numelt * num_digits, 0);
+    auto leaf_ot_msg = absl::MakeSpan(_leaf_ot_msg);
+    std::vector<absl::Span<uint8_t> > each_leaf_ot_msg(numelt * num_digits);
+    for (size_t i = 0; i < each_leaf_ot_msg.size(); ++i) {
+      each_leaf_ot_msg[i] = leaf_ot_msg.subspan(i * radix, radix);
+    }
+
+    for (int64_t i = 0; i < numelt; ++i) {
+      for (int64_t j = 0; j < batch_size; ++j) {
+        auto* this_ot_msg = each_leaf_ot_msg.data() + i * num_digits;
+        auto* this_digit = digits.data() + (i * batch_size + j) * num_digits;
+        auto* this_leaf_cmp =
+            leaf_cmp.data() + (i * batch_size + j) * num_digits;
+        auto* this_leaf_eq = leaf_eq.data() + (i * batch_size + j) * num_digits;
+
+        for (int64_t k = 0; k < num_digits; ++k) {
+          uint8_t rnd_cmp = this_leaf_cmp[k];
+          uint8_t rnd_eq = this_leaf_eq[k];
+          SetLeafOTMsg(this_ot_msg[k], this_digit[k], rnd_cmp, rnd_eq,
+                       greater_than, /*offset*/ j * 2);
+        }
+      }
+    }
+
+    // Step 9: sender of n*M instances of 1-of-N OT
+    basic_ot_prot_->GetSenderCOT()->SendCMCC(leaf_ot_msg, radix,
+                                             /*ot_bitwidth*/ batch_size * 2);
+    basic_ot_prot_->GetSenderCOT()->Flush();
+  } else {
+    // Step 10: receiver of 1-of-N OT
+    std::vector<uint8_t> packed_cmp(numelt * num_digits, 0);
+    basic_ot_prot_->GetReceiverCOT()->RecvCMCC(
+        absl::MakeConstSpan(digits), radix, absl::MakeSpan(packed_cmp),
+        /*bitwidth*/ batch_size * 2);
+
+    // extract equality bits from packed messages
+    // See `SetLeafOTMsg`
+    // Need to unpack the cmp array from batch
+    // eq_n||cmp_n||eq_n-1||cmp_n-1||...||eq0||cmp0
+    for (int64_t i = 0; i < numelt; ++i) {
+      auto* this_pack_cmp = packed_cmp.data() + i * num_digits;
+      for (int64_t j = 0; j < batch_size; ++j) {
+        auto* this_leaf_cmp =
+            leaf_cmp.data() + (i * batch_size + j) * num_digits;
+        auto* this_leaf_eq = leaf_eq.data() + (i * batch_size + j) * num_digits;
+        for (int64_t k = 0; k < num_digits; ++k) {
+          this_leaf_eq[k] = (this_pack_cmp[k] >> (j * 2 + 1)) & 1;
+          this_leaf_cmp[k] = (this_pack_cmp[k] >> (j * 2)) & 1;
+        }
+      }
+    }
+  }
+
+  auto boolean_t = makeType<BShrTy>(field, 1);
+  NdArrayRef prev_cmp =
+      ring_zeros(field, {static_cast<int64_t>(num_digits * num_cmp)})
+          .as(boolean_t);
+  NdArrayRef prev_eq =
+      ring_zeros(field, {static_cast<int64_t>(num_digits * num_cmp)})
+          .as(boolean_t);
+
+  DISPATCH_ALL_FIELDS(field, "extract_ot_msg", [&]() {
+    NdArrayView<ring2k_t> xprev_cmp(prev_cmp);
+    NdArrayView<ring2k_t> xprev_eq(prev_eq);
+    pforeach(0, xprev_cmp.numel(), [&](int64_t i) {
+      xprev_cmp[i] = leaf_cmp[i];
+      xprev_eq[i] = leaf_eq[i];
+    });
+  });
+
+  // Step 12 - 17. Evaluate the traversal AND
+  Shape oshape = inp.shape();
+  if (not is_sender_) {
+    oshape.insert(oshape.end(), batch_size);
+  }
+  return TraversalAND(prev_cmp, prev_eq, num_cmp, num_digits)
+      .as(boolean_t)
+      .reshape(oshape);
+}
+
 NdArrayRef CompareProtocol::Compute(const NdArrayRef& inp, bool greater_than,
                                     int64_t bitwidth) {
   int64_t bw = SizeOf(inp.eltype().as<Ring2k>()->field()) * 8;
@@ -457,6 +592,25 @@ std::array<NdArrayRef, 2> CompareProtocol::ComputeWithEq(const NdArrayRef& inp,
   NdArrayRef eq;
   auto cmp = DoCompute(inp, greater_than, &eq, bitwidth);
   return {cmp, eq};
+}
+
+NdArrayRef CompareProtocol::BatchCompute(const NdArrayRef& inp,
+                                         bool greater_than, int64_t numel,
+                                         int64_t bitwidth, int64_t batch_size) {
+  int64_t bw = SizeOf(inp.eltype().as<Ring2k>()->field()) * 8;
+  SPU_ENFORCE(bitwidth >= 0 && bitwidth <= bw, "bit_width={} out of bound",
+              bitwidth);
+  if (is_sender_) {
+    SPU_ENFORCE_EQ(inp.numel(), numel * batch_size);
+  } else {
+    SPU_ENFORCE_EQ(inp.numel(), numel);
+  }
+
+  if (bitwidth == 0) {
+    bitwidth = bw;
+  }
+
+  return DoBatchCompute(inp, greater_than, numel, bitwidth, batch_size);
 }
 
 }  // namespace spu::mpc::cheetah

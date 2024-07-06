@@ -360,8 +360,10 @@ message CheetahConfig {
   bool disable_matmul_pack = 1;
   // allow least significant bits error for point-wise mul
   bool enable_mul_lsb_error = 2;
+  // allow approximated less than for secret-plaintext compare
+  int32 approx_less_precision = 3;
   // Setup for cheetah ot
-  CheetahOtKind ot_kind = 3;
+  CheetahOtKind ot_kind = 4;
 }
 //////////////////////////////////////////////////////////////////////////
 // Compiler relate definition

@@ -49,4 +49,17 @@ class CommonTypeV : public Kernel {
   void evaluate(KernelEvalContext* ctx) const override;
 };
 
+class CastRing : public Kernel {
+ public:
+  static constexpr char kBindName[] = "cast_ring_a";
+
+  Kind kind() const override { return Kind::Dynamic; }
+
+  void evaluate(KernelEvalContext* ctx) const override;
+
+  NdArrayRef proc(KernelEvalContext* ctx, const NdArrayRef& in,
+                  const FieldType& ftype,
+                  SignType in_sign = SignType::Unknown) const;
+};
+
 }  // namespace spu::mpc::cheetah

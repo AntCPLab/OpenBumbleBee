@@ -29,34 +29,6 @@
 
 namespace spu::mpc::cheetah {
 
-using OTUnaryFunc = std::function<NdArrayRef(
-    const NdArrayRef& sub, const std::shared_ptr<BasicOTProtocols>& ot)>;
-
-using OTBinaryFunc =
-    std::function<NdArrayRef(const NdArrayRef& op0, const NdArrayRef& op1,
-                             const std::shared_ptr<BasicOTProtocols>& ot)>;
-
-using OTUnaryFuncWithU8 = std::function<NdArrayRef(
-    absl::Span<const uint8_t> op, const std::shared_ptr<BasicOTProtocols>& ot)>;
-
-using OTBinaryFuncWithU8 = std::function<NdArrayRef(
-    const NdArrayRef& op0, absl::Span<const uint8_t> op1,
-    const std::shared_ptr<BasicOTProtocols>& ot)>;
-
-NdArrayRef TiledDispatchOTFunc(KernelEvalContext* ctx, const NdArrayRef& x,
-                               OTUnaryFunc func);
-
-NdArrayRef TiledDispatchOTFunc(KernelEvalContext* ctx, const NdArrayRef& x,
-                               const NdArrayRef& y, OTBinaryFunc func);
-
-NdArrayRef TiledDispatchOTFunc(KernelEvalContext* ctx,
-                               absl::Span<const uint8_t> x,
-                               OTUnaryFuncWithU8 func);
-
-NdArrayRef TiledDispatchOTFunc(KernelEvalContext* ctx, const NdArrayRef& x,
-                               absl::Span<const uint8_t> y,
-                               OTBinaryFuncWithU8 func);
-
 class CheetahMulState : public State {
  private:
   mutable std::mutex lock_;

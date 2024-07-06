@@ -16,9 +16,11 @@
 
 #include "libspu/core/ndarray_ref.h"
 #include "libspu/core/trace.h"
+#include "libspu/core/type_util.h"
 #include "libspu/mpc/ab_api.h"
+#include "libspu/mpc/cheetah/nonlinear/ring_ext_prot.h"
 #include "libspu/mpc/cheetah/ot/basic_ot_prot.h"
-#include "libspu/mpc/cheetah/state.h"
+#include "libspu/mpc/cheetah/tiled_dispatch.h"
 #include "libspu/mpc/cheetah/type.h"
 #include "libspu/mpc/common/prg_state.h"
 #include "libspu/mpc/common/pv2k.h"
@@ -59,7 +61,7 @@ NdArrayRef A2B::proc(KernelEvalContext* ctx, const NdArrayRef& x) const {
 
 NdArrayRef B2A::proc(KernelEvalContext* ctx, const NdArrayRef& x) const {
   const auto field = ctx->getState<Z2kState>()->getDefaultField();
-  return TiledDispatchOTFunc(
+  return DispatchUnaryFunc(
              ctx, x,
              [&](const NdArrayRef& input,
                  const std::shared_ptr<BasicOTProtocols>& base_ot) {
@@ -78,6 +80,70 @@ void CommonTypeV::evaluate(KernelEvalContext* ctx) const {
   const auto* rhs_v = rhs.as<Priv2kTy>();
 
   ctx->pushOutput(makeType<AShrTy>(std::max(lhs_v->field(), rhs_v->field())));
+}
+
+void CastRing::evaluate(KernelEvalContext* ctx) const {
+  const auto& val = ctx->getParam<Value>(0);
+  const auto& ftype = ctx->getParam<FieldType>(1);
+  const auto& sign = ctx->getParam<SignType>(2);
+
+  auto res = proc(ctx, UnwrapValue(val), ftype, sign);
+
+  ctx->pushOutput(WrapValue(res));
+}
+
+NdArrayRef CastRing::proc(KernelEvalContext* ctx, const NdArrayRef& in,
+                          const FieldType& ftype, SignType in_sign) const {
+  SPU_ENFORCE(in.eltype().isa<AShrTy>());
+
+  const auto field = in.eltype().as<AShrTy>()->field();
+  const auto numel = in.numel();
+  const size_t k = SizeOf(field) * 8;
+  const size_t to_bits = SizeOf(ftype) * 8;
+
+  if (to_bits == k) {
+    // euqal ring size, do nothing
+    return in;
+  } else if (to_bits < k) {
+    // cast down is a local procedure
+    return DISPATCH_ALL_FIELDS(field, "cheetah.castdown", [&]() {
+      using from_ring2k_t = ring2k_t;
+      return DISPATCH_ALL_FIELDS(ftype, "cheetah.castdown", [&]() {
+        using to_ring2k_t = ring2k_t;
+        NdArrayRef res(makeType<AShrTy>(ftype), in.shape());
+
+        NdArrayView<const from_ring2k_t> _in(in);
+        NdArrayView<to_ring2k_t> _res(res);
+
+        pforeach(0, numel, [&](int64_t idx) {
+          _res[idx] = static_cast<to_ring2k_t>(_in[idx]);
+        });
+        return res;
+      });
+    });
+  }
+
+  // call RingExtProtocol
+  return DispatchUnaryFunc(
+             ctx, in,
+             [&](const NdArrayRef& input,
+                 const std::shared_ptr<BasicOTProtocols>& base_ot) {
+               RingExtendProtocol ext_prot(base_ot);
+               RingExtendProtocol::Meta meta;
+
+               meta.sign = SignType::Unknown;
+               meta.signed_arith = true;
+               meta.use_heuristic = true;
+
+               meta.src_ring = field;
+               meta.src_width = SizeOf(meta.src_ring) * 8;
+
+               meta.dst_ring = ftype;
+               meta.dst_width = SizeOf(meta.dst_ring) * 8;
+
+               return ext_prot.Compute(input, meta);
+             })
+      .as(makeType<AShrTy>(ftype));
 }
 
 }  // namespace spu::mpc::cheetah

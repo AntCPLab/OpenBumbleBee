@@ -139,8 +139,6 @@ class MulAA : public BinaryKernel {
   NdArrayRef mulWithBeaver(KernelEvalContext* ctx, const NdArrayRef& lhs,
                            const NdArrayRef& rhs) const;
 
-  NdArrayRef squareDirectly(KernelEvalContext* ctx, const NdArrayRef& x) const;
-
  public:
   static constexpr char kBindName[] = "mul_aa";
 
