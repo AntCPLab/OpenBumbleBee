@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -25,19 +26,21 @@ if __name__ == "__main__":
     Please DONT commit it unless it will cause build break.
     """
 
-    sim = ppsim.Simulator.simple(3, spu_pb2.ProtocolKind.ABY3, spu_pb2.FieldType.FM64)
+    sim = ppsim.Simulator.simple(
+        2, spu_pb2.ProtocolKind.CHEETAH, spu_pb2.FieldType.FM64
+    )
     copts = spu_pb2.CompilerOptions()
     # Tweak compiler options
     copts.disable_div_sqrt_rewrite = True
 
-    x = np.random.randn(3, 4)
-    y = np.random.randn(5, 6)
-    fn = lambda x, y: si.example_binary(x, y)
+    x = -np.abs(np.random.randn(3, 4, 6) * 13.0)
+    fn = lambda x: si.spu_neg_exp(x)
+    # y = np.random.randn(3, 6, 3)
+    # fn = lambda x, y: jax.lax.dot_general(x, y, ((2, 1), (0, 0)))
     # fn = lambda x, y: jnp.matmul(x, y)
     spu_fn = ppsim.sim_jax(sim, fn, copts=copts)
-    z = spu_fn(x, y)
+    expected = jax.numpy.exp(x)
+    got = spu_fn(x)
 
     print(spu_fn.pphlo)
-
-    print(f"spu out = {z}")
-    print(f"cpu out = {fn(x, y)}")
+    print(np.max(expected - got))

@@ -96,10 +96,12 @@ def run_on_cpu(model, inputs):
         outputs = model(inputs, params=params)
         return outputs.logits
 
+    start = time.time()
     logits = eval(params, inputs)
+    end = time.time()
     predicted_class_idx = jax.numpy.argmax(logits, axis=-1)
-    print(logits[:, :5])
-    print(predicted_class_idx)
+    print(f"CPU runtime: {(end - start)}s")
+    print("Top 5 logits ", logits[:, :5])
     print("CPU Predicted class:", model.config.id2label[predicted_class_idx.item()])
 
 
@@ -115,11 +117,13 @@ def run_on_spu(model, inputs):
     inputs = ppd.device("P1")(lambda x: x)(inputs)
     params = ppd.device("P2")(lambda x: x)(params)
 
+    start = time.time()
+    logits = eval(params, inputs)
     logits_spu = ppd.device("SPU")(eval, copts=copts)(params, inputs)
-    print(ppd.get(logits_spu)[:, :5])
+    end = time.time()
     predicted_class_idx = jax.numpy.argmax(ppd.get(logits_spu), axis=-1)
-    print(predicted_class_idx)
-
+    print(f"SPU runtime: {(end - start)}s")
+    print("Top 5 logits ", ppd.get(logits_spu)[:, :5])
     print("SPU Predicted class:", model.config.id2label[predicted_class_idx.item()])
 
 
@@ -143,15 +147,6 @@ def main():
         cache_dir='/Volumes/HUB/huggingface/hub',
         local_files_only=True,
     )
-
-    outputs = model(inputs)
-    logits = outputs.logits
-
-    # model predicts one of the 1000 ImageNet classes
-    predicted_class_idx = jax.numpy.argmax(logits, axis=-1)
-    print("Predicted class:", model.config.id2label[predicted_class_idx.item()])
-
-    print("Inference ...")
 
     run_on_cpu(model, inputs)
     run_on_spu(model, inputs)

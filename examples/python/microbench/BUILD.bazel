@@ -1,4 +1,4 @@
-# Copyright 2023 Ant Group Co., Ltd.
+# Copyright 2024 Ant Group Co., Ltd.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,34 +12,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+load("@pybind11_bazel//:build_defs.bzl", "pybind_extension")
+load("@rules_python//python:defs.bzl", "py_binary")
 
 package(default_visibility = ["//visibility:public"])
 
-py_library(
-    name = "models",
-    srcs = ["models.py"],
-)
-
 py_binary(
-    name = "flax_resnet_training",
-    srcs = ["flax_resnet_training.py"],
-    data = [
-        "//examples/python/ml/flax_resnet:3pc.json",
-    ],
+    name = "gelu",
+    srcs = ["gelu.py"],
     deps = [
-        ":models",
-        "//spu/utils:distributed",
+        "//spu:api",
+        "//spu/intrinsic:all_intrinsics",
+        "//spu/utils:simulation",
     ],
 )
 
 py_binary(
-    name = "flax_resnet_inference",
-    srcs = ["flax_resnet_inference.py"],
-    data = [
-        "//examples/python/ml/flax_resnet:3pc.json",
-    ],
+    name = "softmax",
+    srcs = ["softmax.py"],
     deps = [
-        "//spu/utils:distributed",
+        "//spu:api",
+        "//spu/intrinsic:all_intrinsics",
+        "//spu/utils:simulation",
+    ],
+)
+
+py_binary(
+    name = "matmul",
+    srcs = ["matmul.py"],
+    deps = [
+        "//spu:api",
+        "//spu/utils:simulation",
     ],
 )

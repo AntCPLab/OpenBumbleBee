@@ -13,7 +13,7 @@ Our implementations are built on top of the  [SPU](https://github.com/secretflow
 
 #### Linux
 
-BumbleBee supports Linux build only.
+BumbleBee supports Linux/MacOS build only.
 
 ```sh
 Install gcc>=11.2, cmake>=3.26, ninja, nasm>=2.15, python>=3.9, bazelisk, xxd, lld
