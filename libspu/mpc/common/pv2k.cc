@@ -352,6 +352,61 @@ class MulVVV : public BinaryKernel {
   }
 };
 
+class BatchMatMulPP : public MatmulKernel {
+ public:
+  static constexpr char kBindName[] = "batch_mmul_pp";
+
+  ce::CExpr latency() const override { return ce::Const(0); }
+
+  ce::CExpr comm() const override { return ce::Const(0); }
+
+  void evaluate(KernelEvalContext* ctx) const override {
+    // NOTE(lwj): overwrite the shape check in the MatmulKernel
+    const auto& lhs = ctx->getParam<Value>(0);
+    const auto& rhs = ctx->getParam<Value>(1);
+    const auto& lhs_shape = lhs.shape();
+    const auto& rhs_shape = rhs.shape();
+    SPU_ENFORCE(lhs_shape.ndim() == rhs_shape.ndim(),
+                "ndim mismatch: lhs={}, rhs={}", lhs_shape, rhs_shape);
+    SPU_ENFORCE(lhs_shape[0] == rhs_shape[0], "batch mismatch: lhs={}, rhs={}",
+                lhs_shape, rhs_shape);
+    SPU_ENFORCE(lhs_shape[2] == rhs_shape[1], "shape mismatch: lhs={}, rhs={}",
+                lhs_shape, rhs_shape);
+    ctx->pushOutput(WrapValue(proc(ctx, lhs.data(), rhs.data())));
+  }
+
+  NdArrayRef proc(KernelEvalContext*, const NdArrayRef& lhs,
+                  const NdArrayRef& rhs) const override {
+    SPU_ENFORCE(lhs.eltype() == rhs.eltype());
+    const int64_t dim4[4] = {lhs.shape()[0], lhs.shape()[1], lhs.shape()[2],
+                             rhs.shape()[2]};
+    const Strides strides(lhs.shape().size(), 1);
+    Index lhs_slice_end(lhs.shape().begin(), lhs.shape().end());
+    Index rhs_slice_end(rhs.shape().begin(), rhs.shape().end());
+    Index lhs_slice_begin(3, 0);
+    Index rhs_slice_begin(3, 0);
+
+    NdArrayRef out(lhs.eltype(), {dim4[0], dim4[1], dim4[3]});
+    for (int64_t batch = 0; batch < dim4[0]; ++batch) {
+      lhs_slice_begin[0] = batch;
+      lhs_slice_end[0] = batch + 1;
+      rhs_slice_begin[0] = batch;
+      rhs_slice_end[0] = batch + 1;
+      auto lhs_slice = lhs.slice(lhs_slice_begin, lhs_slice_end, strides)
+                           .reshape({dim4[1], dim4[2]});
+      auto rhs_slice = rhs.slice(rhs_slice_begin, rhs_slice_end, strides)
+                           .reshape({dim4[2], dim4[3]});
+
+      auto out_slice =
+          out.slice({batch, 0, 0}, {batch + 1, dim4[1], dim4[3]}, strides);
+      out_slice = out_slice.reshape({dim4[1], dim4[3]});
+      ring_mmul_(out_slice, lhs_slice, rhs_slice);
+    }
+
+    return out;
+  }
+};
+
 class MatMulPP : public MatmulKernel {
  public:
   static constexpr char kBindName[] = "mmul_pp";
@@ -950,24 +1005,24 @@ void regPV2kTypes() {
 }
 
 void regPV2kKernels(Object* obj) {
-  obj->regKernel<V2P, P2V,                               //
-                 MakeP, RandP,                           //
-                 NotV, NotP,                             //
-                 EqualVVV, EqualVP, EqualPP,             //
-                 AddVVV, AddVP, AddPP,                   //
-                 MulVVV, MulVP, MulPP,                   //
-                 MatMulVVV, MatMulVP, MatMulPP,          //
-                 AndVVV, AndVP, AndPP,                   //
-                 XorVVV, XorVP, XorPP,                   //
-                 LShiftV, LShiftP,                       //
-                 RShiftV, RShiftP,                       //
-                 BitrevV, BitrevP,                       //
-                 ARShiftV, ARShiftP,                     //
-                 MsbV, MsbP,                             //
-                 TruncV, TruncP,                         //
-                 GenInvPermV, GenInvPermP,               //
-                 InvPermPP, InvPermVV,                   //
-                 PermPP, PermVV, MergeKeysP, MergeKeysV  //
+  obj->regKernel<V2P, P2V,                                      //
+                 MakeP, RandP,                                  //
+                 NotV, NotP,                                    //
+                 EqualVVV, EqualVP, EqualPP,                    //
+                 AddVVV, AddVP, AddPP,                          //
+                 MulVVV, MulVP, MulPP,                          //
+                 MatMulVVV, MatMulVP, MatMulPP, BatchMatMulPP,  //
+                 AndVVV, AndVP, AndPP,                          //
+                 XorVVV, XorVP, XorPP,                          //
+                 LShiftV, LShiftP,                              //
+                 RShiftV, RShiftP,                              //
+                 BitrevV, BitrevP,                              //
+                 ARShiftV, ARShiftP,                            //
+                 MsbV, MsbP,                                    //
+                 TruncV, TruncP,                                //
+                 GenInvPermV, GenInvPermP,                      //
+                 InvPermPP, InvPermVV,                          //
+                 PermPP, PermVV, MergeKeysP, MergeKeysV         //
                  >();
 }
 
