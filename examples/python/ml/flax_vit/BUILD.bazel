@@ -1,4 +1,4 @@
-# Copyright 2023 Ant Group Co., Ltd.
+# Copyright 2024 Ant Group Co., Ltd.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,8 +17,8 @@ load("@rules_python//python:defs.bzl", "py_binary")
 package(default_visibility = ["//visibility:public"])
 
 py_binary(
-    name = "flax_gpt2",
-    srcs = ["flax_gpt2.py"],
+    name = "flax_vit",
+    srcs = ["flax_vit.py"],
     data = ["//examples/python/conf"],
     deps = [
         "//spu/intrinsic:all_intrinsics",

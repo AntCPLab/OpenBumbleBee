@@ -222,7 +222,7 @@ Value f_neg_exp_taylor(SPUContext* ctx, const Value& x) {
   const auto ONE = _constant(ctx, 1, x.shape());
   const auto True = _and(ctx, ONE, ONE);
   float neg_range = -14.0;
-  auto is_too_small =
+  auto is_not_too_small =
       _xor(ctx, True, ComputedBatchLessAP(ctx, x, {neg_range})[0]);
 
   // 1 + x/2^n
@@ -235,7 +235,7 @@ Value f_neg_exp_taylor(SPUContext* ctx, const Value& x) {
   }
 
   // convert the field and fxp back
-  auto ret = _mul(ctx, is_too_small, res).setDtype(x.dtype());
+  auto ret = _mul(ctx, is_not_too_small, res).setDtype(x.dtype());
 
   sent = ctx->lctx()->GetStats()->sent_bytes - sent;
   SPDLOG_INFO("f_nexp {} sent {} MiB", x.numel(), sent / 1024. / 1024.);

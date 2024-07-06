@@ -24,7 +24,16 @@
                     "protocol": "CHEETAH",
                     "field": "FM64",
                     "enable_pphlo_profile": true,
-                    "enable_hal_profile": true
+                    "enable_hal_profile": true,
+                    "fxp_exp_mode": 0, 
+                    "fxp_exp_iters": 5,
+                    "fxp_fraction_bits": 18,
+                    "experimental_enable_colocated_optimization": true,
+                    "cheetah_2pc_config": {
+                      "enable_mul_lsb_error": true,
+                      "approx_less_precision": 4,
+                      "ot_kind": "YACL_Ferret"
+                    }
                 }
             }
         },

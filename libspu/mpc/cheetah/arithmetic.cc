@@ -106,9 +106,21 @@ NdArrayRef MsbA2B::proc(KernelEvalContext* ctx, const NdArrayRef& x) const {
 
 NdArrayRef EqualAP::proc(KernelEvalContext* ctx, const NdArrayRef& x,
                          const NdArrayRef& y) const {
-  EqualAA equal_aa;
+  // NOTE(lwj): this is a temporary dirty hack to reduce the costs of
+  // token-id-to-one-hot.
+  int iequal_bits = 0;
+  const auto* env_str = std::getenv("SPU_BB_SET_IEQUAL_BITS");
+  if (env_str != nullptr) {
+    char* pEnd;
+    auto bits = std::strtol(env_str, &pEnd, 10);
+    if (*pEnd == 0) {
+      iequal_bits = std::min<int>(x.elsize() * 8, std::max<int>(bits, 0));
+    }
+  }
+
   const auto field = ctx->getState<Z2kState>()->getDefaultField();
-  // TODO(juhou): Can we use any place holder to indicate the dummy 0s.
+  EqualAA equal_aa(iequal_bits);
+
   if (0 == ctx->getState<Communicator>()->getRank()) {
     return equal_aa.proc(ctx, x, ring_zeros(field, x.shape()));
   } else {

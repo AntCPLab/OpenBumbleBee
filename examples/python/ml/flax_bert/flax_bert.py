@@ -12,12 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Start nodes.
-# > bazel run -c opt //examples/python/utils:nodectl -- --config `pwd`/examples/python/ml/flax_gpt2/3pc.json up
-#
-# Run this example script.
-# > bazel run -c opt //examples/python/ml/flax_gpt2:flax_gpt2
-
 import argparse
 import json
 import os
@@ -27,7 +21,16 @@ from contextlib import contextmanager
 import flax.linen as fnn
 import jax
 import jax.nn as jnn
-from transformers import AutoTokenizer, FlaxGPT2LMHeadModel, GPT2Config
+from transformers import (
+    AutoTokenizer,
+    BertConfig,
+    BertTokenizerFast,
+    FlaxBertForSequenceClassification,
+    FlaxGPT2LMHeadModel,
+    FlaxRobertaForSequenceClassification,
+    GPT2Config,
+    RobertaTokenizerFast,
+)
 
 import spu.intrinsic as intrinsic
 import spu.spu_pb2 as spu_pb2
@@ -38,7 +41,7 @@ copts = spu_pb2.CompilerOptions()
 copts.enable_optimize_denominator_with_broadcast = True
 
 parser = argparse.ArgumentParser(description='distributed driver.')
-parser.add_argument("-c", "--config", default="examples/python/ml/flax_gpt2/2pc.json")
+parser.add_argument("-c", "--config", default="examples/python/conf/2pc.json")
 args = parser.parse_args()
 
 with open(args.config, 'r') as file:
@@ -85,60 +88,42 @@ def hijack(enabled=True):
     fnn.softmax = fnn_sm
 
 
-TOKEN_NUM = 4
-
-
-def run_on_cpu(model, input_ids, tokenizer):
+def run_on_cpu(model, input_ids, attention_masks, labels):
     print(f"Running on CPU ...")
     params = model.params
 
-    # greedy search
-    # ref: https://huggingface.co/blog/how-to-generate
-    def eval(params, input_ids, token_num=TOKEN_NUM):
-        for _ in range(token_num):
-            outputs = model(input_ids=input_ids, params=params)
-            next_token_logits = outputs[0][0, -1, :]
-            next_token = jax.numpy.argmax(next_token_logits)
-            input_ids = jax.numpy.concatenate(
-                [input_ids, jax.numpy.array([[next_token]])], axis=1
-            )
-        return input_ids
+    def eval(params, input_ids, attention_masks):
+        logits = model(input_ids, attention_masks, params=params)[0]
+        return logits
 
     start = time.time()
-    output_ids = eval(params, input_ids)
+    logits = eval(params, input_ids, attention_masks)
     end = time.time()
-    output_tokens = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-    print(f"CPU runtime: {(end - start)}s\noutput {output_tokens}")
+    print(f"CPU runtime: {(end - start)}s\noutput logits: {logits}")
 
 
-def run_on_spu(model, input_ids, tokenizer):
+def run_on_spu(model, input_ids, attention_masks, labels):
     print(f"Running on SPU ...")
     params = model.params
 
-    def eval(params, input_ids, token_num=TOKEN_NUM):
-        for _ in range(token_num):
-            with hijack(enabled=True):
-                outputs = model(input_ids=input_ids, params=params)
-            next_token_logits = outputs[0][0, -1, :]
-            next_token = jax.numpy.argmax(next_token_logits)
-            input_ids = jax.numpy.concatenate(
-                [input_ids, jax.numpy.array([[next_token]])], axis=1
-            )
-        return input_ids
+    def eval(params, input_ids, attention_masks):
+        with hijack(enabled=True):
+            logits = model(input_ids, attention_masks, params=params)[0]
+        return logits
 
     spu_input_ids = ppd.device("P1")(lambda x: x)(input_ids)
+    spu_attention_masks = ppd.device("P1")(lambda x: x)(attention_masks)
     spu_params = ppd.device("P2")(lambda x: x)(params)
     start = time.time()
-    outputs_ids_spu = ppd.device("SPU")(eval, copts=copts)(spu_params, spu_input_ids)
+    logits_spu = ppd.device("SPU")(eval, copts=copts)(
+        spu_params, spu_input_ids, spu_attention_masks
+    )
     end = time.time()
-    output_ids = ppd.get(outputs_ids_spu)
-    output_tokens = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-    print(f"SPU runtime: {(end - start)}s\noutput {output_tokens}")
+    logits_spu = ppd.get(logits_spu)
+    print(f"SPU runtime: {(end - start)}s\noutput logits: {logits_spu}")
 
 
 def main(tokenizer_func, model_func, checkpoint):
-    # tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    # pretrained_model = FlaxGPT2LMHeadModel.from_pretrained("gpt2")
     model = model_func.from_pretrained(
         checkpoint,
         cache_dir='/Volumes/HUB/huggingface/hub',
@@ -149,17 +134,27 @@ def main(tokenizer_func, model_func, checkpoint):
         cache_dir='/Volumes/HUB/huggingface/hub',
         local_files_only=True,
     )
-    input_ids = tokenizer.encode(
-        'I enjoy walking with my cute dog', return_tensors='jax'
+
+    features = "When you've got snow, it's really hard to learn a snow sport so we looked at all the different ways I could mimic being on snow without actually being on snow."
+    labels = -1
+
+    input_ids, attention_masks = (
+        tokenizer(
+            features,
+            return_tensors="jax",
+        )["input_ids"],
+        tokenizer(
+            features,
+            return_tensors="jax",
+        )["attention_mask"],
     )
 
-    run_on_cpu(model, input_ids, tokenizer)
-    run_on_spu(model, input_ids, tokenizer)
+    run_on_cpu(model, input_ids, attention_masks, labels)
+    run_on_spu(model, input_ids, attention_masks, labels)
 
 
-if __name__ == '__main__':
-    tokenizer = AutoTokenizer
-    model = FlaxGPT2LMHeadModel
-    checkpoint = "gpt2"
-
+if __name__ == "__main__":
+    tokenizer = BertTokenizerFast
+    model = FlaxBertForSequenceClassification
+    checkpoint = "bert-base-cased"
     main(tokenizer, model, checkpoint)

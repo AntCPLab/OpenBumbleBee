@@ -1,74 +1,163 @@
-# SPU: Secure Processing Unit
+## BumbleBee: Secure Two-party Inference Framework for Large Transformers
 
-[![CircleCI](https://dl.circleci.com/status-badge/img/gh/secretflow/spu/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/secretflow/spu/tree/main)
-[![Python](https://img.shields.io/pypi/pyversions/spu.svg)](https://pypi.org/project/spu/)
-[![PyPI version](https://img.shields.io/pypi/v/spu)](https://pypi.org/project/spu/)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/secretflow/spu/badge)](https://securityscorecards.dev/viewer/?uri=github.com/secretflow/spu)
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/8311/badge)](https://www.bestpractices.dev/projects/8311)
+This repo contains a proof-of-concept implementation for our paper.
+The codes are still under heavy developments, and **should not** be used in any security sensitive product.
 
-SPU (Secure Processing Unit) aims to be a `provable`, `measurable` secure computation device,
-which provides computation ability while keeping your private data protected.
+### Requirements
 
-SPU could be treated as a programmable device, it's not designed to be used directly.
-Normally we use SecretFlow framework, which use SPU as the underline secure computing device.
+Our implementations are built on top of the  [SPU](https://github.com/secretflow/spu) library.
 
-Currently, we mainly focus on `provable` security. It contains a secure runtime that evaluates
-[XLA](https://www.tensorflow.org/xla/operation_semantics)-like tensor operations,
-which use [MPC](https://en.wikipedia.org/wiki/Secure_multi-party_computation) as the underline
-evaluation engine to protect privacy information.
+## Build
 
-SPU python package also contains a simple distributed module to demo SPU usage,
-but it's **NOT designed for production** due to system security and performance concerns,
-please **DO NOT** use it directly in production.
+### Prerequisite
 
-## Contribution Guidelines
+#### Linux
 
-If you would like to contribute to SPU, please check [Contribution guidelines](CONTRIBUTING.md).
+BumbleBee supports Linux build only.
 
-If you would like to use SPU for research purposes, please check [research development guidelines](docs/SPU_gudience.pdf) from [@fionser](https://github.com/fionser).
+```sh
+Install gcc>=11.2, cmake>=3.26, ninja, nasm>=2.15, python>=3.9, bazelisk, xxd, lld
 
-This documentation also contains instructions for [build and testing](CONTRIBUTING.md#build).
-
-## Installation Guidelines
-
-### Supported platforms
-
-|            | Linux x86_64 | Linux aarch64 | macOS x64      | macOS Apple Silicon | Windows x64    | Windows WSL2    x64 |
-|------------|--------------|---------------|----------------|---------------------|----------------|---------------------|
-| CPU        | yes          | yes           | yes<sup>1</sup>| yes                 | no             | yes                 |
-| NVIDIA GPU | experimental | no            | no             | n/a                 | no             | experimental        |
-
-1. Due to CI resource limitation, macOS x64 prebuild binary is no longer available.
-
-### Instructions
-
-Please follow [Installation Guidelines](INSTALLATION.md) to install SPU.
-
-### Hardware Requirements
-
-| General Features | FourQ based PSI | GPU |
-| ---------------- | --------------- | --- |
-| AVX/ARMv8        | AVX2/ARMv8      | CUDA 11.8+ |
-
-## Citing SPU
-
-If you think SPU is helpful for your research or development, please consider citing our [paper](https://www.usenix.org/conference/atc23/presentation/ma):
-
-```text
-@inproceedings {spu,
-    author = {Junming Ma and Yancheng Zheng and Jun Feng and Derun Zhao and Haoqi Wu and Wenjing Fang and Jin Tan and Chaofan Yu and Benyu Zhang and Lei Wang},
-    title = {{SecretFlow-SPU}: A Performant and {User-Friendly} Framework for {Privacy-Preserving} Machine Learning},
-    booktitle = {2023 USENIX Annual Technical Conference (USENIX ATC 23)},
-    year = {2023},
-    isbn = {978-1-939133-35-9},
-    address = {Boston, MA},
-    pages = {17--33},
-    url = {https://www.usenix.org/conference/atc23/presentation/ma},
-    publisher = {USENIX Association},
-    month = jul,
-}
+python3 -m pip install -r requirements.txt
+python3 -m pip install -r requirements-dev.txt
+pip install 'transformers[flax]' #Install HuggingFace transformers library
 ```
 
-## Acknowledgement
+Change the pointer activation functions to a Python call so that we can hijack them.
 
-We thank the significant contributions made by [Alibaba Gemini Lab](https://alibaba-gemini-lab.github.io).
+**NOTE:** Make sure the following modifications are properly done. 
+
+```python
+# transformers/models/gpt2/modeling_flax_gpt2.py#294
+def __call__(self, hidden_states, deterministic: bool = True):
+    hidden_states = self.c_fc(hidden_states)
+    #hidden_states = self.act(hidden_states)  
+    # change the act pointer to a JAX call
+    hidden_states = jax.nn.gelu(hidden_states)
+    hidden_states = self.c_proj(hidden_states)
+    hidden_states = self.dropout(hidden_states, deterministic=deterministic)
+    return hidden_states
+
+# transformers/models/bert/modeling_flax_bert.py#465
+def __call__(self, hidden_states):
+    hidden_states = self.dense(hidden_states)
+    #hidden_states = self.activation(hidden_states)
+    hidden_states = jax.nn.gelu(hidden_states)
+    return hidden_states
+
+# transformers/models/vit/modeling_flax_vit.py#278
+def __call__(self, hidden_states):
+    hidden_states = self.dense(hidden_states)
+    #hidden_states = self.activation(hidden_states)
+    hidden_states = jax.nn.gelu(hidden_states)
+    return hidden_states
+```
+
+Also, we can skip some computation in JAX's argmax function. 
+This can reduce some cost in the one-hot encoding (e.g., embedding lookup).
+
+```python
+#jax/_src/lax/lax.py#3919
+def _compute_argminmax(value_comparator, get_identity,
+                       operand, *, index_dtype, axes):
+  # value_comparator is either lax.lt (for argmin) or lax.gt
+  # get_identity(operand.dtype) is inf for argmin or -inf for argmax
+  axis, = axes
+  indices = broadcasted_iota(index_dtype, np.shape(operand), axis)
+  def reducer_fn(op_val_index, acc_val_index):
+    op_val, op_index = op_val_index
+    acc_val, acc_index = acc_val_index
+    # NOTE(lwj): we skip the NaN check in ArgMax which is meaningless in MPC
+    pick_op = value_comparator(op_val, acc_val)
+    return (select(pick_op, op_val, acc_val),
+            select(pick_op, op_index, acc_index))
+    #return (select(pick_op_val, op_val, acc_val),
+    # Pick op_val if Lt (for argmin) or if NaN
+    #pick_op_val = bitwise_or(value_comparator(op_val, acc_val),
+    #                         ne(op_val, op_val))
+    # If x and y are not NaN and x = y, then pick the first
+    #pick_op_index = bitwise_or(pick_op_val,
+    #                           bitwise_and(eq(op_val, acc_val),
+    #                                       lt(op_index, acc_index)))
+    #return (select(pick_op_val, op_val, acc_val),
+    #        select(pick_op_index, op_index, acc_index))
+```
+
+### Build
+
+```sh
+bazel build -c opt examples/python/ml/flax_gpt2/...
+bazel build -c opt examples/python/ml/flax_bert/...
+bazel build -c opt examples/python/ml/flax_vit/...
+```
+
+It might take some times to fetch the dependencies.
+
+## Run Microbenchmarks
+
+* `bazel run -c opt examples/python/microbench:gelu`
+
+* `bazel run -c opt examples/python/microbench:softmax`
+
+* `bazel run -c opt examples/python/microbench:matmul`
+
+
+## Run Private Inferernce
+
+### Flax BERT Example
+
+1. Install datasets
+
+    ```sh
+    pip install datasets
+    ```
+
+2. Launch SPU backend runtime
+
+    ```sh
+    env SPU_BB_SET_IEQUAL_BITS=15 bazel run -c opt //examples/python/utils:nodectl -- --config `pwd`/examples/python/conf/2pc.json up
+    ```
+
+3. Run `flax_bert` example
+
+    ```sh
+    env SPU_BB_SET_IEQUAL_BITS=15 bazel run -c opt //examples/python/ml/flax_bert -- --config `pwd`/examples/python/conf/2pc.json
+    ```
+
+We prefer to set the env variable `SPU_BB_SET_IEQUAL_BITS` equals to the vocabulary size. For instance, in BERT-base, we have about 30522 vocabulary.
+Thus `SPU_BB_SET_IEQUAL_BITS=15` would be enough for the one-hot computation.
+
+### Flax GPT2 Example
+
+1. Launch SPU backend runtime
+
+    ```sh
+    env SPU_BB_SET_IEQUAL_BITS=16 bazel run -c opt //examples/python/utils:nodectl -- --config `pwd`/examples/python/conf/2pc.json up
+    ```
+
+2. Run `flax_gpt2` example
+
+    ```sh
+    env SPU_BB_SET_IEQUAL_BITS=16 bazel run -c opt //examples/python/ml/flax_gpt2 -- --config `pwd`/examples/python/conf/2pc.json
+    ```
+The vocabulary size in GPT2 is about 50k. Thus we need 16bits for the one-hot computation.
+
+### Flax VIT Example
+
+1. Install packages
+
+    ```sh
+    pip install datasets
+    ```
+
+2. Launch SPU backend runtime
+
+    ```sh
+    bazel run -c opt //examples/python/utils:nodectl -- --config `pwd`/examples/python/conf/2pc.json up
+    ```
+
+3. Run `flax_vit_inference` example
+
+    ```sh
+    bazel run -c opt //examples/python/ml/flax_vit/flax_vit_inference -- --config `pwd`/examples/python/conf/2pc.json
+    ```
