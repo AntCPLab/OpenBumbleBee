@@ -22,6 +22,9 @@
 #define    PREFER_A         "spu.prefer_a"
 #define    DBG_PRINT        "spu.dbg_print"
 #define    GATHER           "spu.gather"
+#define    GELU             "spu.gelu"
+#define    SILU             "spu.silu"
+#define    NEG_EXP          "spu.neg_exp"
 // should be consistent with python level
 #define    MAKE_CACHED_VAR  "spu.make_cached_var"
 #define    DROP_CACHED_VAR  "spu.drop_cached_var"

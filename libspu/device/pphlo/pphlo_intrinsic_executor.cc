@@ -19,6 +19,7 @@
 #include "libspu/device/intrinsic_table.h"
 #include "libspu/kernel/hal/debug.h"
 #include "libspu/kernel/hal/fxp_approx.h"
+#include "libspu/kernel/hal/intrinsic/nn/activation.h"
 #include "libspu/kernel/hlo/basic_binary.h"
 #include "libspu/kernel/hlo/casting.h"
 #include "libspu/kernel/hlo/const.h"
@@ -145,6 +146,24 @@ std::vector<Value> intrinsic_dispatcher(SPUContext* ctx,
         kernel::hlo::Cast(ctx, kernel::hlo::Constant(ctx, 0, inputs[0].shape()),
                           VIS_PUBLIC, inputs[0].dtype());
     return {kernel::hlo::Add(ctx, inputs[0], k0)};
+  }
+
+  if (name == GELU) {
+    SPU_ENFORCE(inputs.size() == 1 && inputs[0].isFxp() &&
+                inputs[0].isSecret());
+    return {kernel::hal::intrinsic::nn::f_seg3_gelu(ctx, inputs[0])};
+  }
+
+  if (name == SILU) {
+    SPU_ENFORCE(inputs.size() == 1 && inputs[0].isFxp() &&
+                inputs[0].isSecret());
+    return {kernel::hal::intrinsic::nn::f_seg4_silu(ctx, inputs[0])};
+  }
+
+  if (name == NEG_EXP) {
+    SPU_ENFORCE(inputs.size() == 1 && inputs[0].isFxp() &&
+                inputs[0].isSecret());
+    return {kernel::hal::intrinsic::nn::f_neg_exp_taylor(ctx, inputs[0])};
   }
 
   SPU_THROW("Unhandled intrinsic call {}", name.str());

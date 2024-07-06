@@ -25,6 +25,7 @@ py_library(
     deps = [
         ":example",
         ":example_binary",
+        ":nn",
         # DO-NOT-EDIT:ADD_IMPORT
     ],
 )
@@ -47,4 +48,14 @@ py_library(
     visibility = [
         "//visibility:private",
     ],
+)
+
+py_library(
+    name = "nn",
+    srcs = [
+        "spu_gelu_impl.py",
+        "spu_silu_impl.py",
+        "spu_nexp_impl.py",
+    ],
+    visibility = ["//visibility:private"],
 )
