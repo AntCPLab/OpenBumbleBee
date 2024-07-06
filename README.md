@@ -5,15 +5,19 @@ The codes are still under heavy developments, and **should not** be used in any 
 
 ### Requirements
 
-Our implementations are built on top of the  [SPU](https://github.com/secretflow/spu) library.
+Our implementations are built on top of the  [SPU](https://github.com/secretflow/spu) library, specifically on [this commit](https://github.com/secretflow/spu/tree/724d3d1c3c37e891fcd0493a6cff0bf4310eda70).
+Particularly, we have made the following changes.
+
+* Adding a dispatch from DotGeneral to Batched MatMul. [commit](https://github.com/AntCPLab/OpenBumbleBee/commit/9bf547a71b958465f7ed5a32b69ea6c87690e5d7).
+* Adding an intrinsic dispatch to the activation functions. [commit](https://github.com/AntCPLab/OpenBumbleBee/commit/967ed5a524c3d72763dcb84955ab558bdcc6463b)
 
 ## Build
 
 ### Prerequisite
 
-#### Linux
+#### Linux (Ubuntu)
 
-BumbleBee supports Linux/MacOS build only.
+We prefer a Linux build.
 
 ```sh
 Install gcc>=11.2, cmake>=3.26, ninja, nasm>=2.15, python>=3.9, bazelisk, xxd, lld
@@ -23,9 +27,14 @@ python3 -m pip install -r requirements-dev.txt
 pip install 'transformers[flax]' #Install HuggingFace transformers library
 ```
 
-Change the pointer activation functions to a Python call so that we can hijack them.
+About the commands used to install the above dependencies, you can follow [Ubuntu docker file](https://github.com/secretflow/devtools/blob/main/dockerfiles/ubuntu-base-ci.DockerFile).
 
-**NOTE:** Make sure the following modifications are properly done. 
+### Change the pointer activation functions to a Python call so that we can hijack them.
+
+**NOTE: Make sure the following modifications are properly done.**
+
+**Why?** In SPU, we apply a Python hijack like [this](examples/python/ml/flax_bert/flax_bert.py#68) to replace the entire activation calls with our MPC protocols.
+This hijack provides a simpler alternative to IR rewriting. Pattern matching all IR operations for complex activation functions, such as GeLU, is a tedious task. For the softmax function, we can easily apply this Python hijack. However, for the GeLU/SILU activations, we unfortunately need to modify the HuggingFace source code. This is because the activation calls used by HuggingFace are not Python calls but C pointer functions.
 
 ```python
 # transformers/models/gpt2/modeling_flax_gpt2.py#294
@@ -83,7 +92,7 @@ def _compute_argminmax(value_comparator, get_identity,
     #        select(pick_op_index, op_index, acc_index))
 ```
 
-### Build
+### Build Main Programs 
 
 ```sh
 bazel build -c opt examples/python/ml/flax_gpt2/...
@@ -156,8 +165,8 @@ The vocabulary size in GPT2 is about 50k. Thus we need 16bits for the one-hot co
     bazel run -c opt //examples/python/utils:nodectl -- --config `pwd`/examples/python/conf/2pc.json up
     ```
 
-3. Run `flax_vit_inference` example
+3. Run `flax_vit` example
 
     ```sh
-    bazel run -c opt //examples/python/ml/flax_vit/flax_vit_inference -- --config `pwd`/examples/python/conf/2pc.json
+    bazel run -c opt //examples/python/ml/flax_vit/flax_vit -- --config `pwd`/examples/python/conf/2pc.json
     ```
