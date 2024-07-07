@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Start nodes.
+# > bazel run -c opt //examples/python/utils:nodectl -- --config `pwd`/examples/python/conf/2pc.json up
+#
+# Run this example script.
+# > bazel run -c opt //examples/python/ml/flax_bert -- --config `pwd`/examples/python/conf/2pc.json
+
 import argparse
 import json
 import os
@@ -21,6 +27,7 @@ from contextlib import contextmanager
 import flax.linen as fnn
 import jax
 import jax.nn as jnn
+from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
     BertConfig,
@@ -124,33 +131,27 @@ def run_on_spu(model, input_ids, attention_masks, labels):
 
 
 def main(tokenizer_func, model_func, checkpoint):
-    model = model_func.from_pretrained(
-        checkpoint,
-        cache_dir='/Volumes/HUB/huggingface/hub',
-        local_files_only=True,
-    )
-    tokenizer = tokenizer_func.from_pretrained(
-        checkpoint,
-        cache_dir='/Volumes/HUB/huggingface/hub',
-        local_files_only=True,
-    )
+    dataset = load_dataset("glue", "cola", split="test")
+    model = model_func.from_pretrained(checkpoint)
+    tokenizer = tokenizer_func.from_pretrained(checkpoint)
 
-    features = "When you've got snow, it's really hard to learn a snow sport so we looked at all the different ways I could mimic being on snow without actually being on snow."
-    labels = -1
+    for dummy_input in dataset:
+        features, labels = dummy_input["sentence"], dummy_input["label"]
 
-    input_ids, attention_masks = (
-        tokenizer(
-            features,
-            return_tensors="jax",
-        )["input_ids"],
-        tokenizer(
-            features,
-            return_tensors="jax",
-        )["attention_mask"],
-    )
+        input_ids, attention_masks = (
+            tokenizer(
+                features,
+                return_tensors="jax",
+            )["input_ids"],
+            tokenizer(
+                features,
+                return_tensors="jax",
+            )["attention_mask"],
+        )
 
-    run_on_cpu(model, input_ids, attention_masks, labels)
-    run_on_spu(model, input_ids, attention_masks, labels)
+        run_on_cpu(model, input_ids, attention_masks, labels)
+        run_on_spu(model, input_ids, attention_masks, labels)
+        break  # just test one sentense
 
 
 if __name__ == "__main__":

@@ -35,14 +35,14 @@ def gelu():
 
     sim = ppsim.Simulator(2, config)
 
-    x = np.random.randn(18, 3) * 4.0
+    x = np.random.randn(1 << 10) * 4.0
     spu_fn = ppsim.sim_jax(sim, si.spu_gelu)
     z = spu_fn(x)
     g = jnn.gelu(x)
     diff = z - g
 
-    print(f"gelu spu out = {z[:10]}")
-    print(f"gelu cpu out = {g[:10]}")
+    # print(f"gelu spu out = {z[:10]}")
+    # print(f"gelu cpu out = {g[:10]}")
     print("gelu max diff = {}".format(np.max(diff)))
 
 
@@ -57,17 +57,17 @@ def silu():
 
     sim = ppsim.Simulator(2, config)
 
-    x = np.random.randn(892) * 8.0
+    x = np.random.randn(1 << 20) * 8.0
     spu_fn = ppsim.sim_jax(sim, si.spu_silu)
     z = spu_fn(x)
     g = jnn.silu(x)
     diff = z - g
 
-    print(f"silu spu out = {z[:10]}")
-    print(f"silu cpu out = {g[:10]}")
+    # print(f"silu spu out = {z[:10]}")
+    # print(f"silu cpu out = {g[:10]}")
     print("silu max diff = {}".format(np.max(diff)))
 
 
 if __name__ == "__main__":
     gelu()
-    silu()
+    # silu()

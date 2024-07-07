@@ -13,10 +13,11 @@
 # limitations under the License.
 
 # Start nodes.
-# > bazel run -c opt //examples/python/utils:nodectl -- --config `pwd`/examples/python/ml/flax_gpt2/3pc.json up
+# > bazel run -c opt //examples/python/utils:nodectl -- --config `pwd`/examples/python/conf/2pc.json up
 #
 # Run this example script.
-# > bazel run -c opt //examples/python/ml/flax_gpt2:flax_gpt2
+# > bazel run -c opt //examples/python/ml/flax_gpt2 -- --config `pwd`/examples/python/conf/2pc.json
+
 
 import argparse
 import json
@@ -85,7 +86,7 @@ def hijack(enabled=True):
     fnn.softmax = fnn_sm
 
 
-TOKEN_NUM = 4
+TOKEN_NUM = 8
 
 
 def run_on_cpu(model, input_ids, tokenizer):
@@ -137,18 +138,8 @@ def run_on_spu(model, input_ids, tokenizer):
 
 
 def main(tokenizer_func, model_func, checkpoint):
-    # tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    # pretrained_model = FlaxGPT2LMHeadModel.from_pretrained("gpt2")
-    model = model_func.from_pretrained(
-        checkpoint,
-        cache_dir='/Volumes/HUB/huggingface/hub',
-        local_files_only=True,
-    )
-    tokenizer = tokenizer_func.from_pretrained(
-        checkpoint,
-        cache_dir='/Volumes/HUB/huggingface/hub',
-        local_files_only=True,
-    )
+    model = model_func.from_pretrained(checkpoint)
+    tokenizer = tokenizer_func.from_pretrained(checkpoint)
     input_ids = tokenizer.encode(
         'I enjoy walking with my cute dog', return_tensors='jax'
     )

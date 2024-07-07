@@ -13,10 +13,10 @@
 # limitations under the License.
 
 # Start nodes.
-# > bazel run -c opt //examples/python/utils:nodectl -- up
+# > bazel run -c opt //examples/python/utils:nodectl -- --config `pwd`/examples/python/conf/2pc.json up
 #
 # Run this example script.
-# > bazel run -c opt //examples/python/ml/flax_vit:flax_vit_inference
+# > bazel run -c opt //examples/python/ml/flax_vit -- --config `pwd`/examples/python/conf/2pc.json
 
 import argparse
 import json
@@ -118,7 +118,6 @@ def run_on_spu(model, inputs):
     params = ppd.device("P2")(lambda x: x)(params)
 
     start = time.time()
-    logits = eval(params, inputs)
     logits_spu = ppd.device("SPU")(eval, copts=copts)(params, inputs)
     end = time.time()
     predicted_class_idx = jax.numpy.argmax(ppd.get(logits_spu), axis=-1)
@@ -133,20 +132,12 @@ def main():
     image = Image.open(requests.get(url, stream=True).raw)
 
     # the pre-processor is supposed to be public
-    image_processor = AutoImageProcessor.from_pretrained(
-        "google/vit-base-patch16-224",
-        cache_dir='/Volumes/HUB/huggingface/hub',
-        local_files_only=True,
-    )
+    image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
 
     inputs = image_processor(images=image, return_tensors="np")["pixel_values"]
 
     # load models
-    model = FlaxViTForImageClassification.from_pretrained(
-        "google/vit-base-patch16-224",
-        cache_dir='/Volumes/HUB/huggingface/hub',
-        local_files_only=True,
-    )
+    model = FlaxViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
 
     run_on_cpu(model, inputs)
     run_on_spu(model, inputs)
