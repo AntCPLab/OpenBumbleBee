@@ -169,6 +169,10 @@ void printProfilingData(spu::SPUContext *sctx, const std::string &name,
       getSeconds(exec_stats.execution_time),
       getSeconds(exec_stats.outfeed_time), getSeconds(exec_stats.total_time()));
 
+  auto round_f = [](long f) -> double {
+    return std::roundf(f / 1024. / 1024. * 10000.0) / 10000.0;
+  };
+
   // print action trace information
   {
     std::map<ActionKey, ActionStats> stats;
@@ -212,18 +216,18 @@ void printProfilingData(spu::SPUContext *sctx, const std::string &name,
       for (const auto &key : sorted_by_time) {
         const auto &stat = stats.find(key)->second;
         SPDLOG_INFO(
-            "- {}, executed {} times, duration {}s, send bytes {} recv "
-            "bytes {}",
-            key.name, stat.count, stat.getTotalTimeInSecond(), stat.send_bytes,
-            stat.recv_bytes);
+            "- {}, executed {} times, duration {}s, send MiB {} recv "
+            "MiB {}",
+            key.name, stat.count, stat.getTotalTimeInSecond(),
+            round_f(stat.send_bytes), round_f(stat.recv_bytes));
       }
     }
   }
 
   // print link statistics
-  SPDLOG_INFO(
-      "Link details: total send bytes {}, recv bytes {}, send actions {}",
-      comm_stats.send_bytes, comm_stats.recv_bytes, comm_stats.send_actions);
+  SPDLOG_INFO("Link details: total send MiB {}, recv MiB {}, send actions {}",
+              round_f(comm_stats.send_bytes), round_f(comm_stats.recv_bytes),
+              comm_stats.send_actions);
 }
 
 void SPUErrorHandler(void *use_data, const char *reason, bool gen_crash_diag) {

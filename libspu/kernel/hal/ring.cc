@@ -334,7 +334,7 @@ Value _mmul(SPUContext* ctx, const Value& x, const Value& y) {
                  Value(y.data().reshape({k, n}), y.dtype()));
   }
   auto [m_step, n_step, k_step] =
-      calcMmulTilingSize(m, n, k, x.elsize(), 256UL * 1024 * 1024);
+      calcMmulTilingSize(m, n, k, x.elsize(), 1024UL * 1024 * 1024);
 
   if (ctx->config().experimental_disable_mmul_split() ||
       (m_step == m && n_step == n && k_step == k)) {
