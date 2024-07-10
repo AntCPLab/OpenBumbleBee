@@ -94,9 +94,10 @@ void CastRing::evaluate(KernelEvalContext* ctx) const {
 
 NdArrayRef CastRing::proc(KernelEvalContext* ctx, const NdArrayRef& in,
                           const FieldType& ftype, SignType in_sign) const {
-  SPU_ENFORCE(in.eltype().isa<AShrTy>());
+  SPU_ENFORCE(in.eltype().isa<AShrTy>() or in.eltype().isa<BShrTy>(), "{}",
+              in.eltype());
 
-  const auto field = in.eltype().as<AShrTy>()->field();
+  const auto field = in.eltype().as<RingTy>()->field();
   const auto numel = in.numel();
   const size_t k = SizeOf(field) * 8;
   const size_t to_bits = SizeOf(ftype) * 8;
@@ -104,13 +105,23 @@ NdArrayRef CastRing::proc(KernelEvalContext* ctx, const NdArrayRef& in,
   if (to_bits == k) {
     // euqal ring size, do nothing
     return in;
-  } else if (to_bits < k) {
+  }
+
+  NdArrayRef res;
+  if (in.eltype().isa<mpc::cheetah::BShrTy>()) {
+    const auto* in_type = in.eltype().as<BShrTy>();
+    SPU_ENFORCE(in_type->nbits() <= to_bits);
+    res = NdArrayRef(makeType<BShrTy>(ftype, in_type->nbits()), in.shape());
+  } else {
+    res = NdArrayRef(makeType<AShrTy>(ftype), in.shape());
+  }
+
+  if (to_bits < k or in.eltype().isa<mpc::cheetah::BShrTy>()) {
     // cast down is a local procedure
-    return DISPATCH_ALL_FIELDS(field, "cheetah.castdown", [&]() {
+    return DISPATCH_ALL_FIELDS(field, "cheetah.ring_cast", [&]() {
       using from_ring2k_t = ring2k_t;
-      return DISPATCH_ALL_FIELDS(ftype, "cheetah.castdown", [&]() {
+      return DISPATCH_ALL_FIELDS(ftype, "cheetah.ring_cast", [&]() {
         using to_ring2k_t = ring2k_t;
-        NdArrayRef res(makeType<AShrTy>(ftype), in.shape());
 
         NdArrayView<const from_ring2k_t> _in(in);
         NdArrayView<to_ring2k_t> _res(res);
