@@ -22,7 +22,7 @@
 #include "libspu/kernel/hal/constants.h"
 #include "libspu/kernel/hal/fxp_approx.h"
 #include "libspu/kernel/hal/fxp_base.h"
-#include "libspu/kernel/hal/prot_wrapper.h"
+#include "libspu/kernel/hal/polymorphic.h"
 #include "libspu/kernel/hal/ring.h"
 #include "libspu/kernel/hal/type_cast.h"
 #include "libspu/mpc/cheetah/alg.h"
@@ -56,6 +56,44 @@ static std::vector<Value> ComputedBatchLessAP(SPUContext* ctx, const Value& x,
     ret.emplace_back(d, DT_I1);
   }
   return ret;
+}
+
+// sigmoid(x) for x > 0
+static Value do_f_sigmoid_positive(SPUContext* ctx, const Value& x) {
+  SPU_ENFORCE(x.isFxp() and x.isSecret());
+  // a*x^4 + b*x^3 + c*x^2 + d*x + e
+  std::array<float, 5> coeffs = {0.49352908920523014, 0.3028510171823098,
+                                 -0.06808619212463336, 0.006747908074344234,
+                                 -0.0002472776978734074};
+
+  int fxp = ctx->getFxpBits();
+  int wk_fxp = std::max(fxp, 21);  // 0.0002472776978734074 ~ 2^{-11}
+
+  auto [x2, x3, x4] = ComputeUptoPower4(ctx, x);
+
+  float scale = 1L << fxp;
+
+  auto seg_3 = _mul(ctx, x3, constant(ctx, coeffs[3], x.dtype(), x.shape()));
+  auto seg_2 = _mul(ctx, x2, constant(ctx, coeffs[2], x.dtype(), x.shape()));
+  auto seg_1 = _mul(ctx, x, constant(ctx, coeffs[1], x.dtype(), x.shape()));
+
+  auto seg_0 = constant(ctx, coeffs[0] * scale, x.dtype(), x.shape());
+  auto sigmoid = _add(ctx, seg_0, seg_1);
+  sigmoid = _add(ctx, sigmoid, seg_2);
+  sigmoid = _add(ctx, sigmoid, seg_3);
+
+  // NOTE(lwj) take care the x^4 term due to the tiny coefficient
+  auto seg_4 = _mul(
+      ctx, x4,
+      constant(ctx, coeffs[4] * (1L << (wk_fxp - fxp)), x.dtype(), x.shape()));
+  if (wk_fxp > fxp) {
+    sigmoid = _lshift(ctx, sigmoid, wk_fxp - fxp).setDtype(x.dtype());
+  }
+  sigmoid = _add(ctx, sigmoid, seg_4);
+
+  sigmoid = _trunc(ctx, sigmoid, wk_fxp).setDtype(x.dtype());
+
+  return sigmoid;
 }
 
 static Value do_f_seg3_gelu(SPUContext* ctx, Value x) {
@@ -171,51 +209,81 @@ Value f_seg3_gelu(SPUContext* ctx, const Value& x_) {
   return gelu;
 }
 
+Value do_f_seg4_silu(SPUContext* ctx, const Value& x,
+                     absl::Span<const Value> branch_indicators) {
+  SPU_ENFORCE(x.isFxp() and x.isSecret());
+  SPU_ENFORCE_EQ(branch_indicators.size(), 3U);
+  // branch_indicators[0] <=> |x| <= 8
+  // branch_indicators[1] <=> x >= 0
+  // branch_indicators[2] <=> x >= 8
+
+  // |x| = x >= 0.0 ? x : -x
+  auto abs_x = hal::select(ctx, branch_indicators[1], x, f_negate(ctx, x));
+
+  // sigmoid(|x|)
+  auto pos_sigmoid = do_f_sigmoid_positive(ctx, abs_x);
+
+  auto ONE = constant(ctx, 1.0, pos_sigmoid.dtype(), pos_sigmoid.shape());
+  // 1 - sigmoid(|x|)
+  auto neg_sigmoid = f_sub(ctx, ONE, pos_sigmoid);
+
+  auto sigmoid =
+      hal::select(ctx, branch_indicators[1], pos_sigmoid, neg_sigmoid);
+
+  // x >= 8
+  auto silu = _mul(ctx, branch_indicators[2], ONE);
+
+  // |x| < 8
+  silu = _add(ctx, silu, _mul(ctx, branch_indicators[0], sigmoid))
+             .setDtype(x.dtype());
+
+  return f_mul(ctx, x, silu);
+}
+
 Value f_seg4_silu(SPUContext* ctx, const Value& x) {
-  SPU_ENFORCE(x.isFxp());
   SPU_TRACE_HAL_LEAF(ctx, x);
-  const auto ONE = _constant(ctx, 1, x.shape());
-  const auto True = _and(ctx, ONE, ONE);
+  [[maybe_unused]] size_t sent = ctx->lctx()->GetStats()->sent_bytes;
 
-  auto batch_less_than = ComputedBatchLessAP(ctx, x, {-8.0F, -4.0F, 4.0F});
-  const auto& b1 = batch_less_than[1];           // x < -4.0
-  const auto& b0 = batch_less_than[0];           // x < -8.0
-  auto b2 = _xor(ctx, batch_less_than[2], ONE);  // x >= 4.0
-  auto b3 = _xor(ctx, True, _xor(ctx, b1, b2));  // x in  [-4.0, 4.0)
-  auto b4 = _xor(ctx, b0, b1);                   // x in [-8, -4.0)
+  auto branch_indicators = [&]() {
+    auto src_field = ctx->config().field();
+    auto target_field = FieldType::FM32;
 
-  // seg1 = a[2] * x^2 + a[1] * x + a[0]
-  // seg2 = b[6] * x^6 + b[4] * x^4 + b[2] * x^2 + b[1] * x + b[0]
-  std::vector<float> a_coeffs = {-0.3067541139982155, -0.0819767021525476,
-                                 -0.0055465625580307};
-  std::vector<float> b_coeffs = {
-      0.0085064025895951, 0.5, 0.2281430841728270, 0.0,
-      -0.011113046708173, 0.0, 0.0002743776353465};
+    KernelEvalContext kctx(ctx);
+    mpc::cheetah::CastRing ring_change_kernel;
 
-  const float scale = 1L << ctx->getFxpBits();
-  auto [x2, x3, x4] = ComputeUptoPower4(ctx, x);
-  auto x6 = f_square(ctx, x3);
+    Value x32(ring_change_kernel.proc(&kctx, x.data(), target_field), DT_F32);
 
-  auto seg1_2 = _mul(ctx, x2, constant(ctx, a_coeffs[2], x.dtype(), x.shape()));
-  auto seg1_1 = _mul(ctx, x, constant(ctx, a_coeffs[1], x.dtype(), x.shape()));
-  auto seg1_0 = constant(ctx, a_coeffs[0] * scale, x.dtype(), x.shape());
-  auto seg2_6 = _mul(ctx, x6, constant(ctx, b_coeffs[6], x.dtype(), x.shape()));
-  auto seg2_4 = _mul(ctx, x4, constant(ctx, b_coeffs[4], x.dtype(), x.shape()));
-  auto seg2_2 = _mul(ctx, x2, constant(ctx, b_coeffs[2], x.dtype(), x.shape()));
-  auto seg2_1 = _mul(ctx, x, constant(ctx, b_coeffs[1], x.dtype(), x.shape()));
-  auto seg2_0 = constant(ctx, b_coeffs[0] * scale, x.dtype(), x.shape());
-  auto seg2 =
-      _trunc(ctx, _add(ctx, seg2_0,
-                       _add(ctx, seg2_1,
-                            _add(ctx, seg2_2, _add(ctx, seg2_4, seg2_6)))))
-          .setDtype(x.dtype());
-  auto seg1 = _trunc(ctx, _add(ctx, seg1_0, _add(ctx, seg1_1, seg1_2)))
-                  .setDtype(x.dtype());
-  auto ret = _mul(ctx, b2, x);
-  ret = _add(ctx, ret, _mul(ctx, b4, seg1));
-  ret = _add(ctx, ret, _mul(ctx, b3, seg2));
-  return ret.setDtype(x.dtype());
-  return _mul(ctx, b4, seg1).setDtype(x.dtype());
+    const_cast<RuntimeConfig*>(&ctx->config())->set_field(target_field);
+    ctx->getState<spu::mpc::Z2kState>()->setField(target_field);
+
+    const auto ONE = _constant(ctx, 1, x32.shape());
+    const auto True = _and(ctx, ONE, ONE);
+    // Compute branch indicators in FM32
+    auto batch_less_than = ComputedBatchLessAP(ctx, x32, {-8.0, 0.0F, 8.0});
+
+    batch_less_than[1] = _xor(ctx, batch_less_than[1], ONE);
+    batch_less_than[2] = _xor(ctx, batch_less_than[2], ONE);
+    batch_less_than[0] =
+        _xor(ctx, _xor(ctx, batch_less_than[0], batch_less_than[2]), ONE);
+
+    for (size_t i : {0, 1, 2}) {
+      // cast back to the src_field
+      batch_less_than[i] = Value(
+          ring_change_kernel.proc(&kctx, batch_less_than[i].data(), src_field),
+          DT_I1);
+    }
+
+    const_cast<RuntimeConfig*>(&ctx->config())->set_field(src_field);
+    ctx->getState<spu::mpc::Z2kState>()->setField(src_field);
+    return batch_less_than;
+  }();
+
+  auto silu = do_f_seg4_silu(ctx, x, absl::MakeSpan(branch_indicators));
+
+  sent = ctx->lctx()->GetStats()->sent_bytes - sent;
+  SPDLOG_INFO("seg4_silu {} sent {} MiB", silu.numel(), sent / 1024. / 1024.);
+
+  return silu;
 }
 
 Value f_neg_exp_taylor(SPUContext* ctx, const Value& x) {

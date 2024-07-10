@@ -22,6 +22,7 @@ spu_cc_library(
     deps = [
         "//libspu/kernel/hal:fxp_approx",
         "//libspu/kernel/hal:fxp_base",
+        "//libspu/kernel/hal:polymorphic",
         "//libspu/mpc/cheetah:alg",
         "//libspu/mpc/cheetah:conversion",
     ],
