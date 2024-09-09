@@ -32,9 +32,9 @@ def batch_matmul():
     config.experimental_enable_colocated_optimization = True
 
     sim = ppsim.Simulator(2, config)
-    batch = 16
+    batch = 32
     x = (np.random.randn(batch, 64, 128) * 8.0).astype(int)
-    y = (np.random.randn(batch, 128, 256) * 8.0).astype(int)
+    y = (np.random.randn(batch, 128, 56) * 8.0).astype(int)
     target_func = lambda x, y: dot_general(x, y, ((2, 1), (0, 0)))
 
     spu_fn = ppsim.sim_jax(sim, target_func)
@@ -90,5 +90,5 @@ def matmul_with_packlwe():
 
 if __name__ == "__main__":
     batch_matmul()
-    # matmul_with_packlwe()
+    #matmul_with_packlwe()
     # matmul_with_interleave()
