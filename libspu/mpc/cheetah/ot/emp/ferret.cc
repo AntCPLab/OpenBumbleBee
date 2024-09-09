@@ -1019,5 +1019,15 @@ DEF_SEND_RECV(uint32_t)
 DEF_SEND_RECV(uint64_t)
 DEF_SEND_RECV(uint128_t)
 
+void EmpFerretOt::SendCAMCC_Prime(absl::Span<const uint64_t> corr,
+                                  absl::Span<uint64_t> output, uint64_t prime) {
+  SPU_ENFORCE("Not implemented yet");
+}
+
+void EmpFerretOt::RecvCAMCC_Prime(absl::Span<const uint8_t> choices,
+                                  absl::Span<uint64_t> output, uint64_t prime) {
+  SPU_ENFORCE("Not implemented yet");
+}
+
 #undef DEF_SEND_RECV
 }  // namespace spu::mpc::cheetah

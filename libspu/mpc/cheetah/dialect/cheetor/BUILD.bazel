@@ -1,0 +1,160 @@
+# Copyright 2024 Ant Group Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("//bazel:spu.bzl", "spu_cc_library", "spu_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+spu_cc_library(
+    name = "state",
+    hdrs = ["state.h"],
+    deps = [
+        ":cheetor_mul_prot",
+        "//libspu/core:object",
+    ],
+)
+
+spu_cc_library(
+    name = "arithmetic",
+    srcs = ["arithmetic.cc"],
+    hdrs = ["arithmetic.h"],
+    deps = [
+        ":state",
+        ":type",
+        ":prime_ring_cast_prot",
+        "//libspu/mpc/cheetah:state",
+        "//libspu/mpc/cheetah:truncate",
+        "//libspu/mpc/cheetah:tiled_dispatch",
+    ],
+)
+
+spu_cc_library(
+    name = "type",
+    srcs = ["type.cc"],
+    hdrs = ["type.h"],
+    deps = [
+        "//libspu/mpc/cheetah:type",
+        "//libspu/mpc/common:pv2k",
+        "@com_github_microsoft_seal//:seal",
+    ],
+)
+
+spu_cc_library(
+    name = "io",
+    srcs = ["io.cc"],
+    hdrs = ["io.h"],
+    deps = [
+        ":type",
+        ":conversion",
+        "//libspu/mpc:io_interface",
+        "//libspu/mpc/utils:ring_ops",
+    ],
+)
+
+spu_cc_library(
+    name = "util",
+    srcs = ["util.cc"],
+    hdrs = ["util.h"],
+    deps = [
+        ":type",
+        "//libspu/mpc/utils:ring_ops",
+        "//libspu/mpc/cheetah/rlwe:rlwe_utils",
+        "@com_github_microsoft_seal//:seal",
+    ],
+)
+spu_cc_library(
+    name = "cheetor_mul_helper",
+    srcs = ["cheetor_mul_helper.cc"],
+    hdrs = ["cheetor_mul_helper.h"],
+    deps = [
+        "//libspu/mpc/cheetah/arith:simd_mul_prot",
+        "@com_github_microsoft_seal//:seal",
+    ],
+)
+
+spu_cc_library(
+    name = "cheetor_mul_prot",
+    srcs = ["cheetor_mul_prot.cc"],
+    hdrs = ["cheetor_mul_prot.h"],
+    deps = [
+        ":type",
+        ":util",
+        ":cheetor_mul_helper",
+    ],
+)
+
+spu_cc_library(
+    name = "prime_ring_cast_prot",
+    srcs = ["prime_ring_cast_prot.cc"],
+    hdrs = ["prime_ring_cast_prot.h"],
+    deps = [
+        ":type",
+        "//libspu/mpc/cheetah/nonlinear:compare_prot",
+    ],
+)
+
+spu_cc_library(
+    name = "conversion",
+    srcs = ["conversion.cc"],
+    hdrs = ["conversion.h"],
+    deps = [
+        ":state",
+        ":type",
+        ":prime_ring_cast_prot",
+        "//libspu/mpc/cheetah:state",
+        "//libspu/mpc/cheetah:conversion",
+    ],
+)
+
+spu_cc_test(
+    name = "prime_ring_cast_prot_test",
+    srcs = ["prime_ring_cast_prot_test.cc"],
+    deps = [
+        ":prime_ring_cast_prot",
+        "//libspu/mpc/utils:simulate",
+    ],
+)
+
+spu_cc_test(
+    name = "util_test",
+    srcs = ["util_test.cc"],
+    deps = [
+        ":util",
+        "//libspu/mpc/utils:simulate",
+        "//libspu/mpc/cheetah/nonlinear:ring_ext_prot",
+    ],
+)
+
+spu_cc_test(
+    name = "cheetor_mul_prot_test",
+    srcs = ["cheetor_mul_prot_test.cc"],
+    deps = [
+        ":prime_ring_cast_prot",
+        ":cheetor_mul_prot",
+        "//libspu/mpc/utils:simulate",
+    ],
+)
+
+spu_cc_test(
+    name = "seg3sigmoid_test",
+    srcs = ["seg3sigmoid_test.cc"],
+    deps = [
+        ":prime_ring_cast_prot",
+        ":cheetor_mul_prot",
+        "//libspu/mpc/utils:simulate",
+        "//libspu/mpc/cheetah/arith:cheetah_mul",
+        "//libspu/mpc/cheetah/nonlinear:ring_ext_prot",
+        "//libspu/mpc/cheetah/nonlinear:truncate_prot",
+    ],
+)

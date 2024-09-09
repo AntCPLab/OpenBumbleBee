@@ -76,6 +76,18 @@ spu_cc_library(
 )
 
 spu_cc_library(
+    name = "truncate",
+    srcs = ["truncate.cc"],
+    hdrs = ["truncate.h"],
+    deps = [
+        ":tiled_dispatch",
+        ":type",
+        "//libspu/mpc/cheetah/dialect/cheetor:prime_ring_cast_prot",
+        "//libspu/mpc/cheetah/dialect/cheetor:type",
+        "//libspu/mpc/cheetah/dialect/cheetor:cheetor_mul_prot",
+    ],
+)
+spu_cc_library(
     name = "arithmetic",
     srcs = [
         "arithmetic.cc",
@@ -84,6 +96,7 @@ spu_cc_library(
     hdrs = ["arithmetic.h"],
     deps = [
         ":type",
+        ":truncate",
         ":tiled_dispatch",
         "//libspu/mpc/cheetah/arith:cheetah_arith",
         "//libspu/mpc/cheetah/nonlinear:equal_prot",
@@ -100,6 +113,7 @@ spu_cc_library(
         ":boolean",
         ":conversion",
         ":state",
+        "//libspu/mpc/cheetah/dialect/cheetor:state",
         "//libspu/mpc/common:prg_state",
         "//libspu/mpc/common:pv2k",
         "//libspu/mpc/standard_shape:protocol",
@@ -116,6 +130,8 @@ spu_cc_library(
         ":conversion",
         ":tiled_dispatch",
         "//libspu/core:encoding",
+        "//libspu/mpc/cheetah/dialect/cheetor:prime_ring_cast_prot",
+        "//libspu/mpc/cheetah/dialect/cheetor:state",
     ],
 )
 
@@ -165,5 +181,15 @@ spu_cc_library(
     deps = [
         "//libspu/core:type",
         "//libspu/mpc/common:pv2k",
+    ],
+)
+
+spu_cc_test(
+    name = "alg_test",
+    srcs = ["alg_test.cc"],
+    deps = [
+        ":alg",
+        "//libspu/mpc/cheetah:protocol",
+        "//libspu/mpc/utils:simulate",
     ],
 )

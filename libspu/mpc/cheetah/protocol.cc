@@ -17,13 +17,16 @@
 // FIXME: both emp-tools & openssl defines AES_KEY, hack the include order to
 // avoid compiler error.
 #include "libspu/core/ndarray_ref.h"
+#include "libspu/mpc/common/communicator.h"
 #include "libspu/mpc/common/prg_state.h"
 //
 
 #include "libspu/mpc/cheetah/arithmetic.h"
 #include "libspu/mpc/cheetah/boolean.h"
 #include "libspu/mpc/cheetah/conversion.h"
+#include "libspu/mpc/cheetah/dialect/cheetor/state.h"
 #include "libspu/mpc/cheetah/state.h"
+#include "libspu/mpc/cheetah/truncate.h"
 #include "libspu/mpc/cheetah/type.h"
 #include "libspu/mpc/common/pv2k.h"
 #include "libspu/mpc/standard_shape/protocol.h"
@@ -47,6 +50,7 @@ void regCheetahProtocol(SPUContext* ctx,
   // add Cheetah states
   ctx->prot()->addState<cheetah::CheetahMulState>(
       lctx, ctx->config().cheetah_2pc_config().enable_mul_lsb_error());
+  ctx->prot()->addState<cheetor::CheetorMulState>(lctx);
   ctx->prot()->addState<cheetah::CheetahDotState>(
       lctx, ctx->config().cheetah_2pc_config().disable_matmul_pack());
   ctx->prot()->addState<cheetah::CheetahOTState>(
@@ -65,18 +69,16 @@ void regCheetahProtocol(SPUContext* ctx,
                   cheetah::B2P, cheetah::P2B, cheetah::A2B, cheetah::B2A,   //
                   cheetah::NotA,                                            //
                   cheetah::AddAP, cheetah::AddAA,                           //
-                  cheetah::MulAP, cheetah::MulAA, cheetah::MulAV,           //
-                  cheetah::SquareA,                                         //
-                  cheetah::MulA1B, cheetah::MulA1BV,                        //
+                  cheetah::MulAP, cheetah::MulAA, cheetah::MulA1B,          //
+                  cheetah::MulAV,                                           //
                   cheetah::EqualAA, cheetah::EqualAP,                       //
                   cheetah::MatMulAP, cheetah::MatMulAA, cheetah::MatMulAV,  //
-                  cheetah::MatMulVVS,                                       //
-                  cheetah::BatchMatMulAA,                                   //
+                  cheetah::MatMulVVS, cheetah::BatchMatMulAA,               //
                   cheetah::BatchMatMulAV,                                   //
                   cheetah::LShiftA, cheetah::ARShiftB, cheetah::LShiftB,    //
                   cheetah::RShiftB,                                         //
                   cheetah::BitrevB,                                         //
-                  cheetah::TruncA,                                          //
+                  cheetah::TruncPrA,                                        //
                   cheetah::MsbA2B,                                          //
                   cheetah::CommonTypeB, cheetah::CommonTypeV,               //
                   cheetah::CastTypeB, cheetah::AndBP, cheetah::AndBB,       //

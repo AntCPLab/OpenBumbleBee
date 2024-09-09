@@ -50,12 +50,13 @@ bool SignBit(T x) {
 
 TEST_P(TruncateProtTest, Basic) {
   size_t kWorldSize = 2;
-  int64_t n = 100;
   size_t shift = 12;
   FieldType field = std::get<0>(GetParam());
   bool signed_arith = std::get<1>(GetParam());
   std::string msb = std::get<2>(GetParam());
   SignType sign;
+
+  int64_t n = msb == "Unknown" ? 100 : 1L << 22;
 
   NdArrayRef inp[2];
   inp[0] = ring_rand(field, {n});
@@ -87,8 +88,8 @@ TEST_P(TruncateProtTest, Basic) {
   utils::simulate(kWorldSize, [&](std::shared_ptr<yacl::link::Context> ctx) {
     int rank = ctx->Rank();
     auto conn = std::make_shared<Communicator>(ctx);
-    auto base = std::make_shared<BasicOTProtocols>(
-        conn, CheetahOtKind::YACL_Softspoken);
+    auto base =
+        std::make_shared<BasicOTProtocols>(conn, CheetahOtKind::YACL_Ferret);
     TruncateProtocol trunc_prot(base);
     TruncateProtocol::Meta meta;
     meta.sign = sign;
@@ -104,9 +105,9 @@ TEST_P(TruncateProtTest, Basic) {
     [[maybe_unused]] auto b1 = ctx->GetStats()->sent_bytes.load();
     [[maybe_unused]] auto s1 = ctx->GetStats()->sent_actions.load();
 
-    SPDLOG_DEBUG("Truncate {} bits share by {} bits {} bits each #sent {}",
-                 SizeOf(field) * 8, meta.shift_bits,
-                 (b1 - b0) * 8. / inp[0].numel(), (s1 - s0));
+    SPDLOG_INFO("Truncate {} bits share by {} bits {} bits each #sent {}",
+                SizeOf(field) * 8, meta.shift_bits,
+                (b1 - b0) * 8. / inp[0].numel(), (s1 - s0));
   });
 
   EXPECT_EQ(oup[0].shape(), oup[1].shape());

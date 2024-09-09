@@ -91,6 +91,8 @@ class YaclFerretOt : public spu::mpc::cheetah::FerretOtInterface {
                  int bit_width = 0) override;
   void SendCAMCC(absl::Span<const uint128_t> corr, absl::Span<uint128_t> output,
                  int bit_width = 0) override;
+  void SendCAMCC_Prime(absl::Span<const uint64_t> corr,
+                       absl::Span<uint64_t> output, uint64_t prime) override;
 
   void RecvCAMCC(absl::Span<const uint8_t> binary_choices,
                  absl::Span<uint8_t> output, int bit_width = 0) override;
@@ -100,6 +102,8 @@ class YaclFerretOt : public spu::mpc::cheetah::FerretOtInterface {
                  absl::Span<uint64_t> output, int bit_width = 0) override;
   void RecvCAMCC(absl::Span<const uint8_t> binary_choices,
                  absl::Span<uint128_t> output, int bit_width = 0) override;
+  void RecvCAMCC_Prime(absl::Span<const uint8_t> binary_choices,
+                       absl::Span<uint64_t> output, uint64_t prime) override;
 
   // Run `num_level` of CAMCC concurrently while in the k-th the bit_width is
   // bit_width_begin - k

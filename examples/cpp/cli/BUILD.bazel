@@ -1,0 +1,26 @@
+load("//bazel:spu.bzl", "spu_cc_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+spu_cc_binary(
+    name = "main",
+    srcs = ["main.cc"],
+    deps = [
+        "@llvm-project//llvm:Support",
+        "@yacl//yacl/link:link",
+        "@yacl//yacl/utils:elapsed_timer",
+        "@com_google_absl//absl/strings",
+        "//libspu/core:prelude",
+        "//libspu/core:type",
+        "//libspu/mpc/cheetah/ot:ot",
+        "//libspu/mpc/cheetah:protocol",
+        "//libspu/mpc/cheetah:alg",
+        "//libspu/mpc/cheetah:type",
+        "//libspu/mpc/cheetah/arith:cheetah_mul",
+        "//libspu/mpc/cheetah/nonlinear:compare_prot",
+        "//libspu/mpc/cheetah/nonlinear:ring_ext_prot",
+        "//libspu/mpc/cheetah/nonlinear:truncate_prot",
+        "//libspu/mpc/cheetah/dialect/cheetor:prime_ring_cast_prot",
+        "//libspu/mpc/cheetah/dialect/cheetor:cheetor_mul_prot",
+    ],
+)

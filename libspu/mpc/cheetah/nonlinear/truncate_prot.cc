@@ -122,73 +122,44 @@ NdArrayRef TruncateProtocol::MSB1ToWrap(const NdArrayRef& inp,
 
 // Given msb(xA + xB mod 2^k) = 0, and xA, xB \in [0, 2^k)
 // To compute w = 1{xA + xB > 2^{k} - 1}.
-//
-// Given msb(xA + xB mod 2^k) = 0
-//   1. when xA + xB = x => w = 0
-//   2. when xA + xB = x + 2^{k} => w = 1
-//   For case 1: msb(xA) = msb(xB) = 0 or msb(xA) = msb(xB) = 1
-//   For case 2: msb(xA) = 1 or msb(xB) = 1.
-// Thus w = msb(xA) | msb(xB)
-//
-// 1-of-2 OT msg (r^msb(xA), r^1) on choice msb(xB)
-//   - msb(xB) = 0: get (r, r^msb(xA)) => msb(xA)
-//   - msb(xB) = 1: get (r, r^1) => 1
+//            w = msb(xA) | msb(xB).
 NdArrayRef TruncateProtocol::MSB0ToWrap(const NdArrayRef& inp,
                                         size_t shift_bits) {
+  printf("MSB0\n");
   const auto field = inp.eltype().as<Ring2k>()->field();
   const int64_t numel = inp.numel();
   const int rank = basic_ot_prot_->Rank();
   const size_t bw = SizeOf(field) * 8;
 
-  constexpr size_t N = 2;  // 1-of-2 OT
-  constexpr size_t nbits = 1;
+  NdArrayRef cot_output = ring_zeros(field, inp.shape());
+  DISPATCH_ALL_FIELDS(field, "MSB1ToWrap", [&]() {
+    using u2k = std::make_unsigned<ring2k_t>::type;
+    NdArrayView<const u2k> xinp(inp);
+    auto xout = absl::MakeSpan(&cot_output.at<u2k>(0), cot_output.numel());
 
-  NdArrayRef outp;
-  if (0 == rank) {
-    outp = ring_randbit(field, inp.shape());
-    std::vector<uint8_t> send(numel * N);
-
-    DISPATCH_ALL_FIELDS(field, "MSB0_adjust", [&]() {
-      using u2k = std::make_unsigned<ring2k_t>::type;
-      NdArrayView<const u2k> xinp(inp);
-      NdArrayView<const u2k> xrnd(outp);
-      // when msb(xA) = 0, set (r, 1^r)
-      //  ow. msb(xA) = 1, set (1^r, 1^r)
-      // Equals to (r^msb(xA), r^1)
-      for (int64_t i = 0; i < numel; ++i) {
-        send[2 * i + 0] = xrnd[i] ^ ((xinp[i] >> (bw - 1)) & 1);
-        send[2 * i + 1] = xrnd[i] ^ 1;
-      }
-    });
-
-    auto sender = basic_ot_prot_->GetSenderCOT();
-    sender->SendCMCC(absl::MakeSpan(send), N, nbits);
-    sender->Flush();
-  } else {
-    std::vector<uint8_t> choices(numel, 0);
-    DISPATCH_ALL_FIELDS(field, "MSB0_adjust", [&]() {
-      using u2k = std::make_unsigned<ring2k_t>::type;
-      NdArrayView<const u2k> xinp(inp);
-      for (int64_t i = 0; i < numel; ++i) {
-        choices[i] = (xinp[i] >> (bw - 1)) & 1;
-      }
-    });
-
-    std::vector<uint8_t> recv(numel);
-    basic_ot_prot_->GetReceiverCOT()->RecvCMCC(absl::MakeSpan(choices), N,
-                                               absl::MakeSpan(recv), nbits);
-
-    outp = ring_zeros(field, inp.shape());
-    DISPATCH_ALL_FIELDS(field, "MSB0_finalize", [&]() {
-      NdArrayView<ring2k_t> xoup(outp);
+    if (rank == 0) {
+      std::vector<u2k> cot_input(numel);
       pforeach(0, numel, [&](int64_t i) {
-        xoup[i] = static_cast<ring2k_t>(recv[i] & 1);
+        cot_input[i] = 1U - ((xinp[i] >> (bw - 1)) & 1);
       });
-    });
-  }
 
-  return basic_ot_prot_->B2ASingleBitWithSize(
-      outp.as(makeType<BShrTy>(field, 1)), static_cast<int>(shift_bits));
+      auto sender = basic_ot_prot_->GetSenderCOT();
+      sender->SendCAMCC(absl::MakeSpan(cot_input), xout, shift_bits);
+      sender->Flush();
+    } else {
+      std::vector<uint8_t> cot_input(numel);
+      pforeach(0, numel, [&](int64_t i) {
+        cot_input[i] = 1U - ((xinp[i] >> (bw - 1)) & 1);
+      });
+
+      basic_ot_prot_->GetReceiverCOT()->RecvCAMCC(absl::MakeSpan(cot_input),
+                                                  xout, shift_bits);
+
+      pforeach(0, numel, [&](int64_t i) { xout[i] = 1U - xout[i]; });
+    }
+  });
+
+  return cot_output.as(makeType<BShrTy>(field, 1));
 }
 
 NdArrayRef TruncateProtocol::Compute(const NdArrayRef& inp, Meta meta) {

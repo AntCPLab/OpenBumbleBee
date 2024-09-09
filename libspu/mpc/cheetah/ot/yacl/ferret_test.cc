@@ -210,4 +210,52 @@ TEST_P(FerretCOTTest, ChosenMsgChosenChoice) {
   });
 }
 
+TEST_P(FerretCOTTest, ChosenCorrelationChosenChoice_Prime) {
+  size_t kWorldSize = 2;
+  int64_t n = 128;
+  auto field = std::get<0>(GetParam());
+  if (field == FM128) {
+    return;
+  }
+  uint64_t prime = field == FM32 ? 2147352577ULL : 1152921504606683137ULL;
+  auto use_ss = std::get<1>(GetParam());
+
+  auto _correlation = ring_rand(FM64, {n});
+  for (int64_t i = 0; i < n; ++i) {
+    _correlation.at<uint64_t>(i) %= prime;
+  }
+
+  std::vector<uint8_t> choices(n);
+  std::default_random_engine rdv;
+  std::uniform_int_distribution<uint64_t> uniform(0, -1);
+  std::generate_n(choices.begin(), n, [&]() -> uint8_t {
+    return static_cast<uint8_t>(uniform(rdv) & 1);
+  });
+
+  using ring2k_t = uint64_t;
+  NdArrayView<ring2k_t> correlation(_correlation);
+  std::vector<ring2k_t> computed[2];
+  utils::simulate(kWorldSize, [&](std::shared_ptr<yacl::link::Context> ctx) {
+    auto conn = std::make_shared<Communicator>(ctx);
+    int rank = ctx->Rank();
+    computed[rank].resize(n);
+    YaclFerretOt ferret(conn, rank == 0, use_ss);
+    if (rank == 0) {
+      ferret.SendCAMCC_Prime(makeConstSpan<ring2k_t>(correlation),
+                             absl::MakeSpan(computed[0]), prime);
+      ferret.Flush();
+    } else {
+      ferret.RecvCAMCC_Prime(absl::MakeSpan(choices),
+                             absl::MakeSpan(computed[1]), prime);
+    }
+  });
+
+  for (int64_t i = 0; i < n; ++i) {
+    ring2k_t c = prime - computed[0][i] + computed[1][i];
+    c -= (c >= prime ? prime : 0);
+    ring2k_t e = choices[i] ? correlation[i] : 0;
+    EXPECT_EQ(e, c);
+  }
+}
+
 }  // namespace spu::mpc::cheetah::test

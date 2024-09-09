@@ -35,6 +35,8 @@ spu_cc_library(
         "//libspu/mpc/cheetah/ot:ferret_ot_interface",
         "//libspu/mpc/cheetah/ot:ot_util",
         "//libspu/mpc/common:communicator",
+        "//libspu/mpc/cheetah/rlwe:rlwe_utils",
+        "@com_github_microsoft_seal//:seal",
         "@yacl//yacl/base:aligned_vector",
         "@yacl//yacl/base:buffer",
         "@yacl//yacl/base:dynamic_bitset",

@@ -74,6 +74,8 @@ class FerretOtInterface {
                          absl::Span<uint64_t> output, int bit_width = 0) = 0;
   virtual void SendCAMCC(absl::Span<const uint128_t> corr,
                          absl::Span<uint128_t> output, int bit_width = 0) = 0;
+  virtual void SendCAMCC_Prime(absl::Span<const uint64_t> corr,
+                               absl::Span<uint64_t> output, uint64_t prime) = 0;
 
   virtual void RecvCAMCC(absl::Span<const uint8_t> binary_choices,
                          absl::Span<uint8_t> output, int bit_width = 0) = 0;
@@ -83,6 +85,8 @@ class FerretOtInterface {
                          absl::Span<uint64_t> output, int bit_width = 0) = 0;
   virtual void RecvCAMCC(absl::Span<const uint8_t> binary_choices,
                          absl::Span<uint128_t> output, int bit_width = 0) = 0;
+  virtual void RecvCAMCC_Prime(absl::Span<const uint8_t> binary_choices,
+                               absl::Span<uint64_t> output, uint64_t prime) = 0;
 
   // Run `num_level` of CAMCC concurrently while in the k-th the bit_width is
   // bit_width_begin - k

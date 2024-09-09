@@ -14,8 +14,11 @@
 
 #include "libspu/mpc/cheetah/ot/yacl/ferret.h"
 
+#include <_types/_uint64_t.h>
+
 #include <utility>
 
+#include "seal/modulus.h"
 #include "spdlog/spdlog.h"
 #include "yacl/base/buffer.h"
 #include "yacl/crypto/tools/crhash.h"
@@ -26,6 +29,7 @@
 #include "libspu/mpc/cheetah/ot/yacl/mitccrh_exp.h"
 #include "libspu/mpc/cheetah/ot/yacl/yacl_ote_adapter.h"
 #include "libspu/mpc/cheetah/ot/yacl/yacl_util.h"
+#include "libspu/mpc/cheetah/rlwe/utils.h"
 
 namespace spu::mpc::cheetah {
 
@@ -322,6 +326,125 @@ struct YaclFerretOt::Impl {
         output[i + j] = (T)(pad[j]);
         if (choices[i + j]) {
           output[i + j] = corr_output[j] - output[i + j];
+        }
+      }
+    }
+  }
+
+  void SendCorrelatedMsgChosenChoice_Prime(absl::Span<const uint64_t> corr,
+                                           absl::Span<uint64_t> output,
+                                           uint64_t prime) {
+    using T = uint64_t;
+    seal::Modulus mod_prime(prime);
+    SPU_ENFORCE(mod_prime.is_prime(), "{} is not a prime", prime);
+    SPU_ENFORCE(std::all_of(corr.begin(), corr.end(),
+                            [&](uint64_t v) { return v < prime; }),
+                "correlation is not in Zp");
+    size_t bit_width = absl::bit_width(prime);
+
+    size_t n = corr.size();
+    SPU_ENFORCE_EQ(n, output.size());
+
+    yacl::Buffer buf(n * sizeof(uint128_t));
+    auto rcm_output = MakeSpan_Uint128(buf);
+
+    SendRandCorrelatedMsgChosenChoice(rcm_output.data(), n);
+
+    std::array<uint128_t, 2 * kOTBatchSize> pad;
+    std::vector<T> corr_output(kOTBatchSize);
+
+    size_t eltsize = 8 * sizeof(T);
+    bool packable = eltsize > (size_t)bit_width;
+    size_t packed_size = CeilDiv(kOTBatchSize * bit_width, eltsize);
+
+    std::vector<T> packed_corr_output;
+    if (packable) {
+      packed_corr_output.resize(packed_size);
+    }
+
+    for (size_t i = 0; i < n; i += kOTBatchSize) {
+      size_t this_batch = std::min(kOTBatchSize, n - i);
+      for (size_t j = 0; j < this_batch; ++j) {
+        pad[2 * j] = rcm_output[i + j];
+        pad[2 * j + 1] = rcm_output[i + j] ^ ferret_->GetDelta();
+      }
+
+      yc::ParaCrHashInplace_128(absl::MakeSpan(pad));
+
+      // NOTE(lwj)
+      // Hash(x) from F_{2^128} to Z_{2^128}
+      // Then map Z_{2^128} to Zp
+      for (size_t j = 0; j < this_batch; ++j) {
+        using namespace seal::util;
+        output[i + j] = BarrettReduce(pad[2 * j], mod_prime);
+        corr_output[j] = BarrettReduce(pad[2 * j + 1], mod_prime);
+        corr_output[j] = add_uint_mod(corr_output[j], corr[i + j], mod_prime);
+        corr_output[j] = add_uint_mod(corr_output[j], output[i + j], mod_prime);
+      }
+
+      if (packable) {
+        size_t used = ZipArray<T>({corr_output.data(), this_batch}, bit_width,
+                                  absl::MakeSpan(packed_corr_output));
+        SPU_ENFORCE(used == CeilDiv(this_batch * bit_width, eltsize));
+        io_->send_data(packed_corr_output.data(), used * sizeof(T));
+      } else {
+        io_->send_data(corr_output.data(), sizeof(T) * this_batch);
+      }
+    }
+    io_->flush();
+  }
+
+  void RecvCorrelatedMsgChosenChoice_Prime(absl::Span<const uint8_t> choices,
+                                           absl::Span<uint64_t> output,
+                                           uint64_t prime) {
+    using T = uint64_t;
+    seal::Modulus mod_prime(prime);
+    SPU_ENFORCE(mod_prime.is_prime(), "{} is not a prime", prime);
+    size_t bit_width = absl::bit_width(prime);
+
+    size_t n = choices.size();
+    SPU_ENFORCE_EQ(n, output.size());
+
+    yacl::Buffer buf(n * sizeof(uint128_t));
+    auto rcm_output = MakeSpan_Uint128(buf);
+
+    RecvRandCorrelatedMsgChosenChoice(choices, rcm_output);
+
+    std::array<uint128_t, kOTBatchSize> pad;
+    std::vector<T> corr_output(kOTBatchSize);
+
+    size_t eltsize = 8 * sizeof(T);
+    bool packable = eltsize > (size_t)bit_width;
+    size_t packed_size = CeilDiv(kOTBatchSize * bit_width, eltsize);
+
+    std::vector<T> packed_corr_output;
+    if (packable) {
+      packed_corr_output.resize(packed_size);
+    }
+
+    for (size_t i = 0; i < n; i += kOTBatchSize) {
+      size_t this_batch = std::min(kOTBatchSize, n - i);
+
+      std::memcpy(pad.data(), rcm_output.data() + i,
+                  this_batch * sizeof(uint128_t));
+      // Use CrHash
+      yc::ParaCrHashInplace_128(absl::MakeSpan(pad));
+
+      if (packable) {
+        size_t used = CeilDiv(this_batch * bit_width, eltsize);
+        io_->recv_data(packed_corr_output.data(), sizeof(T) * used);
+        UnzipArray<T>({packed_corr_output.data(), used}, bit_width,
+                      {corr_output.data(), this_batch});
+      } else {
+        io_->recv_data(corr_output.data(), sizeof(T) * this_batch);
+      }
+
+      for (size_t j = 0; j < this_batch; ++j) {
+        using namespace seal::util;
+        output[i + j] = BarrettReduce(pad[j], mod_prime);
+        if (choices[i + j]) {
+          output[i + j] =
+              sub_uint_mod(corr_output[j], output[i + j], mod_prime);
         }
       }
     }
@@ -930,6 +1053,18 @@ DEF_SEND_RECV(uint8_t)
 DEF_SEND_RECV(uint32_t)
 DEF_SEND_RECV(uint64_t)
 DEF_SEND_RECV(uint128_t)
+
+void YaclFerretOt::SendCAMCC_Prime(absl::Span<const uint64_t> corr,
+                                   absl::Span<uint64_t> output,
+                                   uint64_t prime) {
+  impl_->SendCorrelatedMsgChosenChoice_Prime(corr, output, prime);
+}
+
+void YaclFerretOt::RecvCAMCC_Prime(absl::Span<const uint8_t> choices,
+                                   absl::Span<uint64_t> output,
+                                   uint64_t prime) {
+  impl_->RecvCorrelatedMsgChosenChoice_Prime(choices, output, prime);
+}
 
 #undef DEF_SEND_RECV
 }  // namespace spu::mpc::cheetah
