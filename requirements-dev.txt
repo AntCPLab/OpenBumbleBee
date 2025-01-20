@@ -1,9 +1,17 @@
+# basic deps
+grpcio==1.66.0
+numpy>=1.22.0, <2 # FIXME: for SF compatibility
+protobuf==5.27.3
+cloudpickle>=2.0.0
+multiprocess>=0.70.12.2
+cachetools>=5.0.0
+jax[cpu]>=0.4.16, <=0.4.34 # FIXME: Jax 0.4.26+ select perf issue
+termcolor>=2.0.0
 pandas>=1.4.2
-flax
-scikit-learn
-transformers[cpu]
-pillow
-datasets
+flax<0.10.0
+scikit-learn<1.6.0
+# LLVM
+transformers[cpu]==4.31.0
 # for tests
 absl-py>=1.1.0
 tensorflow-cpu>=2.12.0; sys_platform == "linux" and platform_machine == 'x86_64'

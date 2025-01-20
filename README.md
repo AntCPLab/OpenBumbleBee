@@ -34,7 +34,7 @@ Particularly, we have made the following changes.
 ## Build
 
 ### 1. Prerequisite
-We prefer a Linux build. The following build has been tested on **Ubuntu 22.04**. 
+We prefer a Linux build. The following build has been tested on **Ubuntu 22.04** with **gcc-11**.
 
 ```bash
 # set TARGETPLATFORM='linux/arm64' if ARM CPU is used.
