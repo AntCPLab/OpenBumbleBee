@@ -104,10 +104,12 @@ def run_on_cpu(model, inputs):
     print("Top 5 logits ", logits[:, :5])
     print("CPU Predicted class:", model.config.id2label[predicted_class_idx.item()])
 
-
-def run_on_spu(model, inputs):
-    print(f"Running on SPU ...")
+def init_spu(model):
     params = model.params
+    return ppd.device("P2")(lambda x: x)(params)
+    
+def run_on_spu(model, params, inputs):
+    print(f"Running on SPU ...")
 
     def eval(params, inputs):
         with hijack(enabled=True):
@@ -115,7 +117,6 @@ def run_on_spu(model, inputs):
         return outputs.logits
 
     inputs = ppd.device("P1")(lambda x: x)(inputs)
-    params = ppd.device("P2")(lambda x: x)(params)
 
     start = time.time()
     logits_spu = ppd.device("SPU")(eval, copts=copts)(params, inputs)
@@ -127,20 +128,21 @@ def run_on_spu(model, inputs):
 
 
 def main():
-    # load dataset
-    url = "http://images.cocodataset.org/val2017/000000039769.jpg"
-    image = Image.open(requests.get(url, stream=True).raw)
-
+    # load models
+    model = FlaxViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
+    # Init SPU for multiple runs
+    params = init_spu(model)
     # the pre-processor is supposed to be public
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
 
-    inputs = image_processor(images=image, return_tensors="np")["pixel_values"]
-
-    # load models
-    model = FlaxViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
-
-    run_on_cpu(model, inputs)
-    run_on_spu(model, inputs)
+    image_names = ["n01440764_tench.JPEG", "n01531178_goldfinch.JPEG", "n01737021_water_snake.JPEG"]
+    for name in image_names:
+        # load dataset
+        image = Image.open("examples/python/imagenet/{}".format(name))
+        inputs = image_processor(images=image, return_tensors="np")["pixel_values"]
+        print("Name = {} ...".format(name))
+        run_on_cpu(model, inputs)
+        run_on_spu(model, params, inputs)
 
 
 if __name__ == "__main__":

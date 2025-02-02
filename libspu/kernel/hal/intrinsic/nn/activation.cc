@@ -96,14 +96,14 @@ static Value do_f_sigmoid_positive(SPUContext* ctx, const Value& x) {
   return sigmoid;
 }
 
-static Value do_f_seg3_gelu(SPUContext* ctx, Value x) {
+static Value do_f_seg3_gelu(SPUContext* ctx, Value x, bool small_ring_compare) {
   SPU_ENFORCE(x.isFxp() and x.isSecret());
 
   // Compute gelu in FM32
   // To prevent overflow in depth-1 mul, we can not use too large fxp
   // We approximate in x \in [-3, 3].
   const int fxp_before = ctx->getFxpBits();
-  const int _fxp = 12;
+  const int _fxp = small_ring_compare ? 12 : fxp_before;
   const int fxp_to_drop = fxp_before - _fxp;
   const float apprx_range = 3.0;
 
@@ -190,7 +190,7 @@ Value f_seg3_gelu(SPUContext* ctx, const Value& x_, bool small_ring_compare) {
     return ret;
   }();
 
-  auto gelu = do_f_seg3_gelu(ctx, x);
+  auto gelu = do_f_seg3_gelu(ctx, x, small_ring_compare);
 
   if (src_field != target_field) {
     // convert the field and fxp back
@@ -205,7 +205,8 @@ Value f_seg3_gelu(SPUContext* ctx, const Value& x_, bool small_ring_compare) {
   }
 
   sent = ctx->lctx()->GetStats()->sent_bytes - sent;
-  SPDLOG_INFO("seg3_gelu {} sent {} MiB", gelu.numel(), sent / 1024. / 1024.);
+  SPDLOG_INFO("seg3_gelu (i32{}) {} sent {} MiB", small_ring_compare,
+              gelu.numel(), sent / 1024. / 1024.);
   return gelu;
 }
 
