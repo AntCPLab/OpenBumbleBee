@@ -151,7 +151,16 @@ std::vector<Value> intrinsic_dispatcher(SPUContext* ctx,
   if (name == GELU) {
     SPU_ENFORCE(inputs.size() == 1 && inputs[0].isFxp() &&
                 inputs[0].isSecret());
-    return {kernel::hal::intrinsic::nn::f_seg3_gelu(ctx, inputs[0])};
+    return {kernel::hal::intrinsic::nn::f_seg3_gelu(
+        ctx, inputs[0], /*small_ring_compare*/ true)};
+  }
+
+  if (name == I64_GELU) {
+    // TODO(lwj): a better lowering with IR attr.
+    SPU_ENFORCE(inputs.size() == 1 && inputs[0].isFxp() &&
+                inputs[0].isSecret());
+    return {kernel::hal::intrinsic::nn::f_seg3_gelu(
+        ctx, inputs[0], /*small_ring_compare*/ false)};
   }
 
   if (name == SILU) {

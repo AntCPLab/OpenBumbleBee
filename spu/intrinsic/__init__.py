@@ -17,11 +17,13 @@ from .example_impl import example
 
 # DO-NOT-EDIT:ADD_IMPORT
 from .spu_gelu_impl import spu_gelu
+from .spu_vit_gelu_impl import spu_vit_gelu
 from .spu_nexp_impl import spu_neg_exp
 from .spu_silu_impl import spu_silu
 
 __all__ = [
     "spu_gelu",
+    "spu_vit_gelu",
     "spu_silu",
     "spu_neg_exp",
     # "example",

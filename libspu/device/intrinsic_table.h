@@ -23,6 +23,7 @@
 #define    DBG_PRINT        "spu.dbg_print"
 #define    GATHER           "spu.gather"
 #define    GELU             "spu.gelu"
+#define    I64_GELU         "spu.i64_gelu"
 #define    SILU             "spu.silu"
 #define    NEG_EXP          "spu.neg_exp"
 // should be consistent with python level

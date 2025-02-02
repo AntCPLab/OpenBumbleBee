@@ -19,9 +19,11 @@ namespace spu::kernel::hal::intrinsic::nn {
 Value f_neg_exp_taylor(SPUContext* ctx, const Value& x);
 
 // gelu(x)
-Value f_seg3_gelu(SPUContext* ctx, const Value& x);
+Value f_seg3_gelu(SPUContext* ctx, const Value& x,
+                  bool small_ring_compare = true);
 
 // silu(x)
-Value f_seg4_silu(SPUContext* ctx, const Value& x);
+Value f_seg4_silu(SPUContext* ctx, const Value& x,
+                  bool small_ring_compare = true);
 
 }  // namespace spu::kernel::hal::intrinsic::nn

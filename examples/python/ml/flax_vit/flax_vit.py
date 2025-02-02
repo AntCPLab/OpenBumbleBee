@@ -52,7 +52,7 @@ ppd.init(conf["nodes"], conf["devices"])
 
 
 def _gelu(x):
-    return intrinsic.spu_gelu(x)
+    return intrinsic.spu_vit_gelu(x)
 
 
 def _softmax(x, axis=-1, where=None, initial=None):

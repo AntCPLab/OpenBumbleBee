@@ -78,7 +78,6 @@ if [ "$TARGETPLATFORM" = "linux/arm64" ] ; then BAZEL_ARCH=arm64 ; else BAZEL_AR
   && chmod +x /usr/bin/bazel
 
 # install python dependencies
-python3 -m pip install -r requirements.txt
 python3 -m pip install -r requirements-dev.txt
 ```
 
@@ -220,5 +219,5 @@ The vocabulary size in GPT2 is about 50k. Thus we set `SPU_BB_SET_IEQUAL_BITS=16
 3. Run `flax_vit` example
 
     ```sh
-    bazel run -c opt //examples/python/ml/flax_vit/flax_vit -- --config `pwd`/examples/python/conf/2pc.json
+    bazel run -c opt //examples/python/ml/flax_vit -- --config `pwd`/examples/python/conf/2pc.json
     ```

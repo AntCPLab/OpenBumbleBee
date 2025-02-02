@@ -54,6 +54,7 @@ py_library(
     name = "nn",
     srcs = [
         "spu_gelu_impl.py",
+        "spu_vit_gelu_impl.py",
         "spu_silu_impl.py",
         "spu_nexp_impl.py",
     ],

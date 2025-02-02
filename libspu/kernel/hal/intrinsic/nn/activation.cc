@@ -158,7 +158,7 @@ static Value do_f_seg3_gelu(SPUContext* ctx, Value x) {
   return gelu;
 }
 
-Value f_seg3_gelu(SPUContext* ctx, const Value& x_) {
+Value f_seg3_gelu(SPUContext* ctx, const Value& x_, bool small_ring_compare) {
   SPU_TRACE_HAL_LEAF(ctx, x_);
   SPU_ENFORCE(ctx->config().protocol() == ProtocolKind::CHEETAH);
 
@@ -167,7 +167,7 @@ Value f_seg3_gelu(SPUContext* ctx, const Value& x_) {
   // NOTE(lwj): We compute the whole seg3_gelu(x) over a smaller 32-bit ring.
   // We first cast down the share of x to the target ring FM32.
   auto src_field = ctx->config().field();
-  auto target_field = FieldType::FM32;
+  auto target_field = small_ring_compare ? FieldType::FM32 : src_field;
 
   spu::Value x = [&]() {
     if (src_field == target_field) {
@@ -240,13 +240,13 @@ Value do_f_seg4_silu(SPUContext* ctx, const Value& x,
   return f_mul(ctx, x, silu);
 }
 
-Value f_seg4_silu(SPUContext* ctx, const Value& x) {
+Value f_seg4_silu(SPUContext* ctx, const Value& x, bool small_ring_compare) {
   SPU_TRACE_HAL_LEAF(ctx, x);
   [[maybe_unused]] size_t sent = ctx->lctx()->GetStats()->sent_bytes;
 
   auto branch_indicators = [&]() {
     auto src_field = ctx->config().field();
-    auto target_field = FieldType::FM32;
+    auto target_field = small_ring_compare ? FieldType::FM32 : src_field;
 
     KernelEvalContext kctx(ctx);
     mpc::cheetah::CastRing ring_change_kernel;
