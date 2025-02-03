@@ -87,7 +87,7 @@ struct CheetahMul::Impl : public EnableCPRNG {
     auto parms = seal::EncryptionParameters(scheme_type);
     std::vector<int> modulus_bits;
     if (allow_high_prob_one_bit_error_) {
-      modulus_bits = {60, 48, 40};
+      modulus_bits = {60, 59, 40};
     } else {
       modulus_bits = {60, 32, 52};
     }
